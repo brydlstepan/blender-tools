@@ -60,12 +60,19 @@ def _draw_absolute_transform(layout: bpy.types.UILayout, context: Context) -> No
         hint.scale_y = 0.85
         hint.label(text="Rotation / Scale: Object mode", icon="INFO")
 
-    hint = layout.column()
-    hint.scale_y = 0.85
-    hint.label(text="'-' = mixed. Type a value to set all.")
-
     if props.last_status:
         layout.label(text=props.last_status, icon="CHECKMARK")
+
+
+class VIEW3D_PT_blender_tools_item_extended(Panel):
+    bl_label = "Transform"
+    bl_idname = "VIEW3D_PT_blender_tools_item_extended"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Item Extended"
+
+    def draw(self, context: Context) -> None:
+        _draw_absolute_transform(self.layout, context)
 
 
 class VIEW3D_PT_blender_tools_extended(Panel):
@@ -78,9 +85,6 @@ class VIEW3D_PT_blender_tools_extended(Panel):
     def draw(self, context: Context) -> None:
         layout = self.layout
 
-        _draw_absolute_transform(layout, context)
-
-        layout.separator()
         layout.label(text="Parenting:")
         layout.operator("blender_tools.clear_parent_keep_transform", icon="X")
 
@@ -95,7 +99,7 @@ class VIEW3D_PT_blender_tools_extended(Panel):
         footer.label(text=VERSION)
 
 
-classes = (VIEW3D_PT_blender_tools_extended,)
+classes = (VIEW3D_PT_blender_tools_item_extended, VIEW3D_PT_blender_tools_extended)
 
 
 def register() -> None:
