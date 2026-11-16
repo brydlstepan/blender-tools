@@ -12,13 +12,14 @@ from bpy.props import EnumProperty
 from bpy.types import Context, Object, Operator, Scene
 from mathutils import Quaternion, Vector
 
-from ..separate_fbx_export.ops import (
+from ..fbx_common import (
     ensure_object_mode,
     export_object_fbx,
     iter_export_roots,
     preserved_selection,
     sanitize_filename,
 )
+from .convert import to_unreal_location, to_unreal_rotation
 from .props import blend_name, resolve_export_dir
 from .remote import RemoteExecution, RemoteExecutionError, UnrealNode
 
@@ -38,22 +39,15 @@ def unreal_asset_name(name: str) -> str:
 
 
 def blender_to_unreal_location(scene: Scene, location: Vector) -> list[float]:
-    """World position in Blender -> Unreal centimetres (same unit handling as the FBX exporter).
-
-    Unreal's FBX import (Convert Scene) maps Blender X/Y/Z to Unreal X/-Y/Z.
-    """
+    """World position in Blender -> Unreal centimetres (same unit handling as the FBX exporter)."""
     units = scene.unit_settings
     k = 1.0 if units.system == "NONE" else 100.0 * units.scale_length
-    return [location.x * k, -location.y * k, location.z * k]
+    return to_unreal_location(location.x, location.y, location.z, k)
 
 
 def blender_to_unreal_rotation(rotation: Quaternion) -> list[float]:
-    """World rotation in Blender -> Unreal quaternion [x, y, z, w].
-
-    Mirroring Y (Blender -> Unreal) turns rotation R into M R M, i.e. the quaternion
-    (w, x, y, z) becomes (w, -x, y, -z).
-    """
-    return [-rotation.x, rotation.y, -rotation.z, rotation.w]
+    """World rotation in Blender -> Unreal quaternion [x, y, z, w]."""
+    return to_unreal_rotation(rotation.x, rotation.y, rotation.z, rotation.w)
 
 
 def _selected_meshes(context: Context) -> list[Object]:
@@ -164,14 +158,15 @@ def _write_job_file(context: Context, items: list[dict]) -> str:
             "restore_world_positions": settings.restore_world_positions,
             "place_meshes": settings.place_mode == "MESHES",
             "create_actor": settings.place_mode == "ACTOR",
-            "place_actor": settings.place_mode == "ACTOR",
             "actor_name": unreal_asset_name(settings.actor_name.replace("{blend}", blend)),
         },
     }
-    path = os.path.join(tempfile.gettempdir(), "blender_tools_unreal_job.json")
-    with open(path, "w", encoding="utf-8") as handle:
+    # Unique file per run, so two Blender windows never overwrite each other's job.
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".json", prefix="blender_tools_unreal_", delete=False, encoding="utf-8"
+    ) as handle:
         json.dump(job, handle)
-    return path
+        return handle.name
 
 
 def _parse_result(result: dict) -> dict | None:
@@ -258,6 +253,7 @@ class BLENDERTOOLS_OT_unreal_import(Operator):
             node_id = _nodes[0].node_id
         _last_node_id = node_id
 
+        data_path = None
         context.window.cursor_set("WAIT")
         try:
             items, export_failed = export_selected(context)
@@ -278,6 +274,11 @@ class BLENDERTOOLS_OT_unreal_import(Operator):
             return {"CANCELLED"}
         finally:
             context.window.cursor_set("DEFAULT")
+            if data_path:
+                try:
+                    os.remove(data_path)
+                except OSError:
+                    pass
 
         if not result.get("success"):
             error = str(result.get("result") or "").strip().splitlines()

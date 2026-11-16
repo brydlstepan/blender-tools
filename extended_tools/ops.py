@@ -6,7 +6,7 @@ import bpy
 from bpy.types import Context, Operator
 
 from . import clear_parent
-from .version import VERSION
+from ..version import VERSION
 
 
 class BLENDERTOOLS_OT_clear_parent_keep_transform(Operator):
@@ -28,9 +28,6 @@ class BLENDERTOOLS_OT_clear_parent_keep_transform(Operator):
         )
 
     def execute(self, context: Context):
-        if context.mode != "OBJECT":
-            bpy.ops.object.mode_set(mode="OBJECT")
-
         selected = list(context.selected_objects)
         cleared, baked = clear_parent.clear_parents_keep_world(
             selected,

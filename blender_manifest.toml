@@ -1,13 +1,13 @@
 schema_version = "1.0.0"
 
 id = "blender_tools"
-version = "0.5.0"
+version = "0.6.0"
 name = "Blender Tools"
 tagline = "Custom viewport tools that fix awkward Blender defaults"
 maintainer = "brydlst"
 type = "add-on"
 tags = ["3D View", "Mesh", "Import-Export", "Object"]
-blender_version_min = "4.2.0"
+blender_version_min = "5.2.0"
 license = [
   "SPDX:GPL-3.0-or-later",
 ]
@@ -15,11 +15,24 @@ copyright = [
   "2026 brydlst",
 ]
 
+[permissions]
+network = "Talks to a running Unreal Editor on this machine"
+files = "Writes exported FBX files to the export folder"
+
 [build]
 paths_exclude_pattern = [
   "__pycache__/",
   ".git/",
+  ".github/",
   "*.zip",
   ".cursor/",
+  ".claude/",
+  ".agents/",
   "agent-transcripts/",
+  "docs/",
+  "site/",
+  "dist/",
+  "tests/",
+  "AGENTS.md",
+  "PLAN.md",
 ]

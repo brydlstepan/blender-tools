@@ -80,40 +80,7 @@ class BLENDERTOOLS_OT_set_absolute_channel_axis(Operator):
         return {"FINISHED"}
 
 
-# Keep old id as alias so any lingering timers/scripts don't break.
-class BLENDERTOOLS_OT_set_absolute_location_axis(Operator):
-    bl_idname = "blender_tools.set_absolute_location_axis"
-    bl_label = "Set Absolute Location Axis"
-    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
-
-    axis: IntProperty(name="Axis", min=0, max=2, default=0)
-    value: FloatProperty(name="Value", unit="LENGTH")
-    space: EnumProperty(
-        name="Space",
-        items=(
-            ("GLOBAL", "Global", ""),
-            ("LOCAL", "Local", ""),
-        ),
-        default="GLOBAL",
-    )
-
-    @classmethod
-    def poll(cls, context: bpy.types.Context) -> bool:
-        return context.mode in {"EDIT_MESH", "OBJECT"}
-
-    def execute(self, context: bpy.types.Context):
-        return bpy.ops.blender_tools.set_absolute_channel_axis(
-            channel="LOC",
-            axis=self.axis,
-            value=self.value,
-            space=self.space,
-        )
-
-
-classes = (
-    BLENDERTOOLS_OT_set_absolute_channel_axis,
-    BLENDERTOOLS_OT_set_absolute_location_axis,
-)
+classes = (BLENDERTOOLS_OT_set_absolute_channel_axis,)
 
 
 def register() -> None:

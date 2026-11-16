@@ -14,6 +14,8 @@ Channel = Literal["LOC", "ROT", "SCALE"]
 _AXIS_EPS = 1e-6
 _ROT_EPS = 1e-5  # radians
 _EULER_ORDER = "XYZ"
+# Above this many selected vertices the edit-mode location is not scanned (it shows "-").
+_SCAN_LIMIT = 20_000
 
 
 @dataclass(frozen=True)
@@ -87,7 +89,8 @@ def selected_rotations(context: bpy.types.Context, space: str) -> list[Euler]:
         if _is_global(space):
             rotations.append(obj.matrix_world.to_euler(_EULER_ORDER))
         else:
-            rotations.append(obj.matrix_local.to_euler(_EULER_ORDER))
+            # matrix_basis = what the N-panel edits (no parent inverse, no parenting).
+            rotations.append(obj.matrix_basis.to_euler(_EULER_ORDER))
     return rotations
 
 
@@ -122,12 +125,24 @@ def axis_display(
     return AxisDisplay(has_selection=True, uniform=True, value=first)
 
 
+def _too_many_selected_verts(context: bpy.types.Context) -> bool:
+    if context.mode != "EDIT_MESH":
+        return False
+    total = sum(
+        obj.data.total_vert_sel for obj in context.objects_in_mode_unique_data if obj.type == "MESH"
+    )
+    return total > _SCAN_LIMIT
+
+
 def get_channel_displays(
     context: bpy.types.Context,
     space: str,
     channel: Channel,
 ) -> tuple[AxisDisplay, AxisDisplay, AxisDisplay]:
     if channel == "LOC":
+        if _too_many_selected_verts(context):
+            mixed = AxisDisplay(has_selection=True, uniform=False)
+            return (mixed, mixed, mixed)
         vectors = selected_locations(context, space)
         return (
             axis_display([v.x for v in vectors]),
@@ -160,7 +175,7 @@ def set_edit_mesh_location_axis(
     count = 0
     for obj, bm in iter_edit_meshes(context):
         matrix = obj.matrix_world
-        inverse = matrix.inverted()
+        inverse = matrix.inverted_safe()
         changed = False
 
         for vert in bm.verts:
@@ -221,17 +236,11 @@ def set_object_rotation_axis(
             euler[axis] = value
             obj.matrix_world = Matrix.LocRotScale(loc, euler.to_quaternion(), scale)
         else:
-            matrix = obj.matrix_local.copy()
-            loc, rot_q, scale = matrix.decompose()
+            loc, rot_q, scale = obj.matrix_basis.decompose()
             euler = rot_q.to_euler(_EULER_ORDER)
             euler[axis] = value
-            # Write through quaternion to avoid mode-specific euler order traps.
-            prev_mode = obj.rotation_mode
-            obj.rotation_mode = "QUATERNION"
-            obj.location = loc
-            obj.rotation_quaternion = euler.to_quaternion()
-            obj.scale = scale
-            obj.rotation_mode = prev_mode
+            # The setter writes into the object's own rotation mode.
+            obj.matrix_basis = Matrix.LocRotScale(loc, euler.to_quaternion(), scale)
         count += 1
     return count
 

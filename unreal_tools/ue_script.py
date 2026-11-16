@@ -253,11 +253,10 @@ def _place_meshes(items, meshes, options, actor_subsystem, result):
 def _find_or_create_blueprint(name, folder):
     for asset_data in _registry_assets(["Blueprint"]):
         if str(asset_data.asset_name) == name:
-            return asset_data.get_asset(), False
+            return asset_data.get_asset()
     factory = unreal.BlueprintFactory()
     factory.set_editor_property("parent_class", unreal.Actor)
-    blueprint = unreal.AssetToolsHelpers.get_asset_tools().create_asset(name, folder, unreal.Blueprint, factory)
-    return blueprint, True
+    return unreal.AssetToolsHelpers.get_asset_tools().create_asset(name, folder, unreal.Blueprint, factory)
 
 
 def _blueprint_components(subsystem, blueprint):
@@ -330,7 +329,7 @@ def _set_actor_space_transform(blueprint, data, component, location, rotation):
 
 def _build_actor(items, meshes, options, folder, actor_subsystem, result):
     name = options["actor_name"]
-    blueprint, _created = _find_or_create_blueprint(name, folder)
+    blueprint = _find_or_create_blueprint(name, folder)
     if blueprint is None:
         result["failed"].append(name)
         return
@@ -364,19 +363,19 @@ def _build_actor(items, meshes, options, folder, actor_subsystem, result):
     unreal.BlueprintEditorLibrary.compile_blueprint(blueprint)
     result["actor"] = blueprint.get_path_name().split(".")[0]
 
-    if options["place_actor"]:
-        placed = _tagged_actors(actor_subsystem, ACTOR_TAG).get(name)
-        if placed is None:
-            actor_class = unreal.BlueprintEditorLibrary.generated_class(blueprint)
-            placed = actor_subsystem.spawn_actor_from_class(actor_class, unreal.Vector(0.0, 0.0, 0.0), ZERO_ROTATION)
-            if placed is not None:
-                placed.set_editor_property("tags", [unreal.Name(ACTOR_TAG + name)])
-                placed.set_actor_label(name)
-                result["placed"] += 1
-        elif restore:
-            placed.set_actor_location_and_rotation(unreal.Vector(0.0, 0.0, 0.0), ZERO_ROTATION, False, True)
-            placed.set_actor_scale3d(unreal.Vector(1.0, 1.0, 1.0))
-            result["moved"] += 1
+    # Placing the actor is part of "Create Actor".
+    placed = _tagged_actors(actor_subsystem, ACTOR_TAG).get(name)
+    if placed is None:
+        actor_class = unreal.BlueprintEditorLibrary.generated_class(blueprint)
+        placed = actor_subsystem.spawn_actor_from_class(actor_class, unreal.Vector(0.0, 0.0, 0.0), ZERO_ROTATION)
+        if placed is not None:
+            placed.set_editor_property("tags", [unreal.Name(ACTOR_TAG + name)])
+            placed.set_actor_label(name)
+            result["placed"] += 1
+    elif restore:
+        placed.set_actor_location_and_rotation(unreal.Vector(0.0, 0.0, 0.0), ZERO_ROTATION, False, True)
+        placed.set_actor_scale3d(unreal.Vector(1.0, 1.0, 1.0))
+        result["moved"] += 1
 
 
 # --------------------------------------------------------------------- main

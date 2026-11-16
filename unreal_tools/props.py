@@ -8,7 +8,8 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, PointerProperty, StringProperty
 from bpy.types import Object, PropertyGroup, Scene
 
-from ..separate_fbx_export.ops import sanitize_filename
+from ..fbx_common import sanitize_filename
+from .convert import collapse_slashes
 
 DEFAULT_EXPORT_DIR = "//../../../source/3D/{blend}/{collection}/"
 
@@ -33,11 +34,7 @@ def resolve_export_dir(template: str, obj: Object) -> str:
     path = template.replace("{blend}", sanitize_filename(blend_name() or "untitled"))
     path = path.replace("{collection}", collection_folder(obj))
     path = path.replace("{object}", sanitize_filename(obj.name))
-    # An empty token leaves "a//b": collapse it, but keep the leading "//" (blend-relative).
-    prefix, rest = ("//", path[2:]) if path.startswith("//") else ("", path)
-    while "//" in rest:
-        rest = rest.replace("//", "/")
-    return os.path.normpath(bpy.path.abspath(prefix + rest))
+    return os.path.normpath(bpy.path.abspath(collapse_slashes(path)))
 
 
 class BlenderToolsUnrealSettings(PropertyGroup):

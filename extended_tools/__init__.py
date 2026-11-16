@@ -1,9 +1,10 @@
-"""Extended Tools: improved parenting and related object utilities."""
+"""Extended Tools: absolute transform, clear parent and related object utilities."""
 
-from . import ops, panel
+from . import absolute_item, ops, panel
 
 
 def register() -> None:
+    absolute_item.register()
     ops.register()
     panel.register()
 
@@ -11,3 +12,4 @@ def register() -> None:
 def unregister() -> None:
     panel.unregister()
     ops.unregister()
+    absolute_item.unregister()

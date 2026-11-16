@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Context, Panel
 
-from ..separate_fbx_export.ops import iter_export_roots
+from ..fbx_common import iter_export_roots
 from .props import resolve_export_dir
 
 

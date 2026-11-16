@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Context, Panel
 
-from .version import VERSION
+from ..version import VERSION
 
 
 def _draw_absolute_transform(layout: bpy.types.UILayout, context: Context) -> None:
@@ -22,7 +22,7 @@ def _draw_absolute_transform(layout: bpy.types.UILayout, context: Context) -> No
         return
 
     # Never write RNA from draw() — schedule sync instead.
-    from ..absolute_item import props as abs_props
+    from .absolute_item import props as abs_props
 
     abs_props.schedule_sync()
 

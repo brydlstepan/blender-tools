@@ -1,4 +1,4 @@
-"""Exact clear-parent helpers (quaternion LRS + shear bake)."""
+"""Exact clear-parent helpers (location/rotation/scale + shear bake)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from mathutils import Matrix
 
 # Object types whose geometry can absorb non-LRS residual (shear from scaled parents).
 _GEOMETRY_TYPES = frozenset({"MESH", "CURVE", "SURFACE", "FONT", "LATTICE"})
-_SHEAR_EPS = 1e-7
+_SHEAR_EPS = 1e-5  # float32 noise in a matrix product is about 1e-7
 
 
 def objects_with_parents(objects: Iterable[bpy.types.Object]) -> list[bpy.types.Object]:
@@ -41,20 +41,18 @@ def _clear_delta_transforms(obj: bpy.types.Object) -> None:
 
 
 def _apply_world_matrix_quaternion(obj: bpy.types.Object, world: Matrix) -> bool:
-    """Apply world matrix via quaternion LRS; bake leftover shear into geometry.
+    """Apply world matrix as location/rotation/scale; bake leftover shear into geometry.
 
+    The rotation is written in the object's own rotation mode (matrix_basis setter).
     Returns True if geometry was modified to absorb residual shear.
     """
-    obj.rotation_mode = "QUATERNION"
     _clear_delta_transforms(obj)
 
     loc, rot, scale = world.decompose()
     lrs = Matrix.LocRotScale(loc, rot, scale)
     residual = lrs.inverted() @ world
 
-    obj.location = loc
-    obj.rotation_quaternion = rot
-    obj.scale = scale
+    obj.matrix_basis = lrs
     obj.matrix_parent_inverse.identity()
 
     if _matrix_near_identity(residual):
@@ -75,11 +73,11 @@ def clear_parents_keep_world(
     *,
     view_layer: bpy.types.ViewLayer | None = None,
 ) -> tuple[int, int]:
-    """Clear parents while preserving world appearance (quaternion method).
+    """Clear parents while preserving world appearance.
 
     1. Snapshot every target's ``matrix_world``
     2. Clear all parents
-    3. Re-apply via quaternion location/rotation/scale
+    3. Re-apply as location/rotation/scale (rotation mode kept)
     4. Bake leftover shear into mesh/curve data when needed
 
     Returns ``(cleared_count, geometry_baked_count)``.
