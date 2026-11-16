@@ -1,0 +1,33 @@
+name: Cache Blender
+
+# A tag run can only read caches made by the same tag or by the default branch.
+# This job fills the cache from main, so every release run reuses it instead of
+# downloading Blender again. It refreshes weekly because GitHub drops caches
+# that were not used for 7 days.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/actions/setup-blender/**
+      - .github/workflows/cache-blender.yml
+      - .github/workflows/release.yml
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+env:
+  BLENDER_VERSION: "5.2.3"
+  BLENDER_SERIES: "5.2"
+
+permissions:
+  contents: read
+
+jobs:
+  cache:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-blender
+        with:
+          version: ${{ env.BLENDER_VERSION }}
+          series: ${{ env.BLENDER_SERIES }}

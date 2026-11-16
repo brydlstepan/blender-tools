@@ -1,0 +1,51 @@
+name: Set up Blender
+description: Install the Blender libraries and a cached Blender build at ~/blender
+
+inputs:
+  version:
+    description: Blender version, e.g. 5.2.3
+    required: true
+  series:
+    description: Release folder on the download server, e.g. 5.2
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Blender libraries
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libxi6 libxrender1 libxkbcommon0 libsm6 libgl1 libxxf86vm1 libxfixes3
+
+    - name: Cache Blender
+      id: blender-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/blender
+        key: blender-${{ inputs.version }}-linux-x64
+
+    - name: Download Blender
+      if: steps.blender-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        SERIES: ${{ inputs.series }}
+      run: |
+        name="blender-${VERSION}-linux-x64.tar.xz"
+        file="$RUNNER_TEMP/$name" # outside the checkout, or it ends up in the zip
+        # Try the official server first, then mirrors (the official one can answer 403 to CI runners).
+        for base in \
+          "https://download.blender.org/release/Blender${SERIES}" \
+          "https://mirrors.ocf.berkeley.edu/blender/release/Blender${SERIES}" \
+          "https://ftp.nluug.nl/pub/graphics/blender/release/Blender${SERIES}"; do
+          if curl -fsSL --retry 3 --retry-delay 5 -o "$file" "$base/$name"; then
+            mkdir -p ~/blender
+            tar -xJf "$file" -C ~/blender --strip-components=1
+            rm -f "$file"
+            exit 0
+          fi
+          echo "Download from $base failed, trying the next mirror" >&2
+        done
+        echo "Could not download Blender from any mirror" >&2
+        exit 1
