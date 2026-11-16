@@ -43,6 +43,8 @@ class VIEW3D_PT_blender_tools_unreal(Panel):
                 hint.label(text=resolve_export_dir(settings.export_dir, meshes[0]))
             hint.label(text="Tokens: {blend} {collection} {object} · // = .blend folder")
             body.prop(settings, "use_mesh_modifiers")
+            body.label(text="Checks before sending")
+            body.prop(settings, "checks")
 
         col = layout.column(align=True)
         col.scale_y = 1.3

@@ -19,6 +19,8 @@ from ..fbx_common import (
     preserved_selection,
     sanitize_filename,
 )
+from ..preferences import unreal_timeout
+from . import checks
 from .convert import to_unreal_location, to_unreal_rotation
 from .props import blend_name, resolve_export_dir
 from .remote import RemoteExecution, RemoteExecutionError, UnrealNode
@@ -61,6 +63,30 @@ def _check_can_export(context: Context) -> str | None:
     if not _selected_meshes(context):
         return "Select one or more mesh objects"
     return None
+
+
+_MAX_REPORTED = 8
+
+
+def run_checks(operator: Operator, context: Context) -> bool:
+    """Report every problem in the selection. Returns False when an error blocks the send."""
+    settings = context.scene.blender_tools_unreal
+    problems = checks.check_objects(
+        _selected_meshes(context), enabled=set(settings.checks), asset_name=unreal_asset_name
+    )
+    return report_problems(operator, problems)
+
+
+def report_problems(operator: Operator, problems: list[checks.Problem]) -> bool:
+    """Report problems (errors first, all of them in the console). False if any is an error."""
+    ordered = sorted(problems, key=lambda p: p.severity != checks.ERROR)
+    for problem in ordered:
+        print(f"[Blender Tools] {problem.severity}: {problem.text()}")
+    for problem in ordered[:_MAX_REPORTED]:
+        operator.report({problem.severity}, problem.text())
+    if len(ordered) > _MAX_REPORTED:
+        operator.report({"WARNING"}, f"...and {len(ordered) - _MAX_REPORTED} more (see the System Console)")
+    return not any(p.severity == checks.ERROR for p in problems)
 
 
 def export_selected(context: Context) -> tuple[list[dict], list[str]]:
@@ -117,6 +143,8 @@ class BLENDERTOOLS_OT_unreal_export(Operator):
         return problem is None
 
     def execute(self, context: Context):
+        if not run_checks(self, context):
+            return {"CANCELLED"}
         items, failed = export_selected(context)
         if failed:
             self.report({"WARNING"}, f"Exported {len(items)} FBX(s); failed: {', '.join(failed)}")
@@ -253,6 +281,12 @@ class BLENDERTOOLS_OT_unreal_import(Operator):
             node_id = _nodes[0].node_id
         _last_node_id = node_id
 
+        node = next(n for n in _nodes if n.node_id == node_id)
+        if not report_problems(self, checks.project_plugin_problems(node.project_root)):
+            return {"CANCELLED"}
+        if not run_checks(self, context):
+            return {"CANCELLED"}
+
         data_path = None
         context.window.cursor_set("WAIT")
         try:
@@ -268,7 +302,7 @@ class BLENDERTOOLS_OT_unreal_import(Operator):
             )
             with RemoteExecution() as remote:
                 remote.connect(node_id)
-                result = remote.run(command)
+                result = remote.run(command, timeout=unreal_timeout(context))
         except (OSError, RemoteExecutionError) as exc:
             self.report({"ERROR"}, f"Unreal: {exc}")
             return {"CANCELLED"}

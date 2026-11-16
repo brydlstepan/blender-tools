@@ -186,7 +186,10 @@ class RemoteExecution:
             self._channel.setblocking(True)
             self._remote_node_id = remote_node_id
             return
-        raise RemoteExecutionError("Unreal did not open the command connection")
+        raise RemoteExecutionError(
+            "Unreal did not open the command connection. It may be busy (compiling shaders or "
+            "showing a dialog); wait a moment and try again"
+        )
 
     def run(self, command: str, *, timeout: float = 600.0, exec_mode: str = MODE_EXEC_FILE) -> dict:
         """Run Python in the connected editor and return its `command_result` data."""
@@ -207,7 +210,10 @@ class RemoteExecution:
             try:
                 part = self._channel.recv(_RECEIVE_BUFFER_SIZE)
             except socket.timeout as exc:
-                raise RemoteExecutionError("Timed out waiting for Unreal") from exc
+                raise RemoteExecutionError(
+                    f"Timed out after {timeout:g} s waiting for Unreal. It may still be importing: "
+                    "check the Unreal log, or raise the timeout in the add-on preferences"
+                ) from exc
             if not part:
                 raise RemoteExecutionError("Unreal closed the connection")
             data += part

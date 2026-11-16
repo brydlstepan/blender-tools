@@ -19,6 +19,7 @@ def _load(name, relative):
 
 convert = _load("convert", "unreal_tools/convert.py")
 remote = _load("remote", "unreal_tools/remote.py")
+checks = _load("checks", "unreal_tools/checks.py")
 
 
 class ConvertTests(unittest.TestCase):
@@ -57,6 +58,42 @@ class WireFormatTests(unittest.TestCase):
     def test_partial_message_does_not_parse(self):
         raw = remote._encode("command_result", "a", data={"success": True})
         self.assertIsNone(remote._decode(raw[:-5]))
+
+
+class CheckTests(unittest.TestCase):
+    def test_name_clash_is_an_error_and_ignores_case(self):
+        problems = checks.find_asset_name_clashes([("Crate.001", "Crate_001"), ("crate_001", "crate_001"), ("Barrel", "Barrel")])
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0].severity, checks.ERROR)
+        self.assertIn("Crate.001", problems[0].subject)
+        self.assertIn("crate_001", problems[0].subject)
+
+    def test_no_clash_no_problem(self):
+        self.assertEqual(checks.find_asset_name_clashes([("A", "A"), ("B", "B")]), [])
+
+    def test_only_explicitly_disabled_required_plugins_are_flagged(self):
+        text = json.dumps({"Plugins": [
+            {"Name": "PythonScriptPlugin", "Enabled": False},
+            {"Name": "EditorScriptingUtilities", "Enabled": True},
+            {"Name": "SomethingElse", "Enabled": False},
+        ]})
+        self.assertEqual(checks.disabled_required_plugins(text), ["PythonScriptPlugin"])
+
+    def test_plugin_check_survives_bad_input(self):
+        self.assertEqual(checks.disabled_required_plugins("not json"), [])
+        self.assertEqual(checks.disabled_required_plugins("[1, 2]"), [])
+        self.assertEqual(checks.disabled_required_plugins("{}"), [])
+
+    def test_project_folder_that_cannot_be_read_gives_no_problems(self):
+        self.assertEqual(checks.project_plugin_problems("Z:/definitely/not/here"), [])
+
+
+class MessageTests(unittest.TestCase):
+    def test_timeout_message_names_the_seconds_and_the_preference(self):
+        # The text a user reads when Unreal takes too long.
+        source = (ROOT / "unreal_tools" / "remote.py").read_text(encoding="utf-8")
+        self.assertIn("raise the timeout in the add-on preferences", source)
+        self.assertIn("It may be busy", source)
 
 
 if __name__ == "__main__":

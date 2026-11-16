@@ -108,6 +108,9 @@ Default `//../../../source/3D/{blend}/{collection}/` → a blend at `project/pro
 | Keep World Positions | on | Pivots are at 0 (no rotation) in the assets; actors / Blueprint components get their Blender world position and rotation so Unreal matches Blender. Off: new ones go to 0, existing ones keep their transform in Unreal |
 | In Unreal | Create Actor | **Do Nothing** (import / reimport only) · **Place Static Meshes in Scene** (one Static Mesh actor per object, tagged `BlenderTools:<blend>/<object>`, updated on reimport) · **Create Actor** (Blueprint `BP_{blend}` with one mesh component per object, placed once in the level; an existing Blueprint with that name is updated; with Keep World Positions, component positions are set in actor/world space, so components you re-parent under each other in the Blueprint don't drift) |
 | Apply Modifiers | on | |
+| Checks | all on | Before sending, looks for meshes without faces, two objects that would get the same Unreal asset name (errors, stop the send), and empty or out-of-range material slots, missing texture files, an Armature modifier without vertex groups (warnings). Each can be switched off |
+
+The import also reads the open project's `.uproject` and stops if Python Script or Editor Scripting Utilities is turned off there. The time Blender waits for Unreal (default 600 s) is set in Preferences → Extensions → Blender Tools.
 
 | Button | What it does |
 | --- | --- |

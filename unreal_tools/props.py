@@ -9,6 +9,7 @@ from bpy.props import BoolProperty, EnumProperty, PointerProperty, StringPropert
 from bpy.types import Object, PropertyGroup, Scene
 
 from ..fbx_common import sanitize_filename
+from .checks import ALL_CHECKS, CHECK_ITEMS
 from .convert import collapse_slashes
 
 DEFAULT_EXPORT_DIR = "//../../../source/3D/{blend}/{collection}/"
@@ -77,6 +78,14 @@ class BlenderToolsUnrealSettings(PropertyGroup):
         name="Actor Name",
         description="Blueprint asset name; {blend} = .blend name. An existing Blueprint with this name is updated (positions in world space, so re-parented components keep their place)",
         default="BP_{blend}",
+    )
+
+    checks: EnumProperty(
+        name="Checks",
+        description="Problems to look for before sending. Errors stop the send, warnings are only reported",
+        items=CHECK_ITEMS,
+        options={"ENUM_FLAG"},
+        default=set(ALL_CHECKS),
     )
 
     use_mesh_modifiers: BoolProperty(
