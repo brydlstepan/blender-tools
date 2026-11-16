@@ -1,0 +1,25 @@
+schema_version = "1.0.0"
+
+id = "blender_tools"
+version = "0.5.0"
+name = "Blender Tools"
+tagline = "Custom viewport tools that fix awkward Blender defaults"
+maintainer = "brydlst"
+type = "add-on"
+tags = ["3D View", "Mesh", "Import-Export", "Object"]
+blender_version_min = "4.2.0"
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+copyright = [
+  "2026 brydlst",
+]
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  ".git/",
+  "*.zip",
+  ".cursor/",
+  "agent-transcripts/",
+]
