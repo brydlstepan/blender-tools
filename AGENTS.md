@@ -2,12 +2,12 @@
 
 ## Project
 
-Blender Tools is a Blender 4.2+ extension (Python, `bpy`) with four modules: `absolute_item` (absolute transform), `extended_tools` (sidebar panel, clear parent), `separate_fbx_export` (one FBX per object) and `unreal_tools` (export and import into a running Unreal Editor).
+Blender Tools is a Blender 5.2+ extension (Python, `bpy`) with three modules: `extended_tools` (sidebar panel, absolute transform, clear parent), `separate_fbx_export` (one FBX per object) and `unreal_tools` (export and import into a running Unreal Editor).
 
 <!-- Yours: describe the project, stack, and commands. agent-kit only touches the two lines below. -->
 - profiles: software-dev
 - tracker: local
-- build/test commands: not decided yet (no tests; build the extension with `blender --command extension build --source-dir .`)
+- build/test commands: `python -m unittest discover tests` (no Blender needed); build with `blender --command extension build --source-dir .`
 
 <!-- agent-kit:begin -->
 <!-- Managed by agent-kit. Edits here are replaced on --update; put your own rules above. -->

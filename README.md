@@ -1,35 +1,40 @@
 # Blender Tools
 
-Custom Blender **5.2** extension modules for viewport workflows that Blender’s defaults get wrong.
+Custom Blender **5.2+** extension modules for viewport workflows that Blender’s defaults get wrong.
 
-## Install (Blender 5.2)
+## Install (Blender 5.2+)
 
-Do **not** install the lone `__init__.py` file. Blender must get the **whole folder** (manifest + package).
+Blender must get the **whole extension**, never the lone `__init__.py`.
 
-### Option A — Extensions (recommended)
+- **From the project page (once published):** drag the zip link onto a Blender window, or add the repository link in Preferences → Get Extensions to get updates.
+- **From disk:** Preferences → Get Extensions → top-right **▼** → **Install from Disk…** → pick the `.zip`.
+- **Dev install (live edits):** copy or junction this folder to `%APPDATA%\Blender Foundation\Blender\5.2\extensions\user_default\blender_tools`, then enable **Blender Tools** in Preferences → Extensions.
 
-1. Zip the **contents** of this folder (so the zip root has `blender_manifest.toml` and `__init__.py`), **or** build one:
+Build the zip from this folder:
 
-   ```bash
-   blender --command extension build --source-dir "C:\Users\brydlst\Documents\_Local\Projects\_tools\Blender_Tools"
-   ```
+```bash
+blender --command extension build --source-dir .
+```
 
-2. Blender → **Edit → Preferences → Get Extensions** (Extensions tab)
-3. Top-right **▼** → **Install from Disk…**
-4. Pick the `.zip`
-5. Enable **Blender Tools**
+Preferences → Add-ons → Install on a lone `__init__.py` copies one file into `scripts\addons` and does not give a usable module.
 
-### Option B — Dev install (live edits)
+## Development
 
-Copy or junction this project into:
+```bash
+python -m unittest discover tests
+```
 
-`%APPDATA%\Blender Foundation\Blender\5.2\extensions\user_default\blender_tools`
+Tests cover the code that does not need Blender (Unreal conversions and the remote-execution wire format). The version lives only in `blender_manifest.toml`.
 
-Then in Preferences → Extensions, enable **Blender Tools**. Restart Blender if it does not appear yet.
+## Layout
 
-### Wrong path (what happened before)
-
-**Preferences → Add-ons → Install** on `__init__.py` only copies that one file into `scripts\addons` and will **not** show a usable module.
+| Path | What |
+| --- | --- |
+| `extended_tools/` | Sidebar panel, Clear Parent, and `absolute_item/` (absolute transform fields) |
+| `separate_fbx_export/` | File → Export → FBX Separate Objects |
+| `unreal_tools/` | Export and import into a running Unreal Editor |
+| `fbx_common.py` | FBX export helpers shared by the two export tools |
+| `version.py` | Reads the version from the manifest |
 
 ## Modules
 
