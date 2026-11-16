@@ -1,4 +1,10 @@
-"""Scene properties driving absolute Location / Rotation / Scale fields."""
+"""Scene properties driving the absolute Location / Rotation / Scale fields.
+
+Each axis is a real float property, so the fields look and behave like Blender's own
+Item > Transform fields (units, drag, arrows, Ctrl+wheel). When the selection does not
+share one value on an axis, the panel draws a text field showing "-" instead; typing a
+number there sets every selected element to it.
+"""
 
 from __future__ import annotations
 
@@ -6,24 +12,33 @@ from math import radians
 
 import bpy
 from bpy.app.handlers import persistent
-from bpy.props import EnumProperty, PointerProperty, StringProperty
+from bpy.props import EnumProperty, FloatProperty, PointerProperty, StringProperty
 from bpy.types import PropertyGroup
 
 from .apply import Channel
 
-# Prevent recursive updates when syncing UI text from the selection.
+# Prevent recursive updates when syncing the fields from the selection.
 _syncing = False
 _MIXED = "-"
 # Channels waiting for a deferred absolute-set; skip overwriting those fields.
 _pending: set[tuple[str, int]] = set()
 _sync_timer_pending = False
+# (channel, axis) -> "none" (nothing selected), "mixed" or "value". Read by the panel.
+_state: dict[tuple[str, int], str] = {}
 
-_LOC_ATTRS = ("loc_x", "loc_y", "loc_z")
-_ROT_ATTRS = ("rot_x", "rot_y", "rot_z")
-_SCALE_ATTRS = ("scale_x", "scale_y", "scale_z")
+_PREFIX = {"LOC": "loc", "ROT": "rot", "SCALE": "scale"}
+_CHANNELS = ("LOC", "ROT", "SCALE")
 
 
-def _parse_axis_text(text: str) -> float | None:
+def prop_name(channel: Channel, axis: int, *, mixed: bool = False) -> str:
+    return f"{_PREFIX[channel]}_{'xyz'[axis]}" + ("_mixed" if mixed else "")
+
+
+def axis_state(channel: Channel, axis: int) -> str:
+    return _state.get((channel, axis), "none")
+
+
+def _parse_number(text: str) -> float | None:
     stripped = text.strip().replace(",", ".")
     if not stripped or stripped == _MIXED:
         return None
@@ -31,6 +46,18 @@ def _parse_axis_text(text: str) -> float | None:
         return float(stripped)
     except ValueError:
         return None
+
+
+def _parse_length(text: str, scene: bpy.types.Scene) -> float | None:
+    """Text typed into a mixed Location field -> Blender units. Plain numbers use the scene's unit."""
+    units = scene.unit_settings
+    if units.system != "NONE":
+        try:
+            meters = bpy.utils.units.to_value(units.system, "LENGTH", text, str_ref_unit=units.length_unit)
+            return meters / units.scale_length
+        except Exception:  # Blender evaluates the text as an expression; anything odd means "not a number"
+            pass
+    return _parse_number(text)
 
 
 def _schedule_set(channel: Channel, axis: int, value: float, space: str) -> None:
@@ -58,97 +85,109 @@ def _schedule_set(channel: Channel, axis: int, value: float, space: str) -> None
     bpy.app.timers.register(_run_set, first_interval=0.0)
 
 
-def _make_channel_update(channel: Channel, axis: int, attrs: tuple[str, str, str]):
-    def _update(self: "AbsoluteItemProps", context: bpy.types.Context) -> None:
-        global _syncing
+def _make_value_update(channel: Channel, axis: int):
+    """The user edited a float field: set that axis absolutely on every selected element."""
+
+    def _update(self: "AbsoluteItemProps", _context: bpy.types.Context) -> None:
         if _syncing:
             return
-
-        raw = getattr(self, attrs[axis])
-        parsed = _parse_axis_text(raw)
-        if parsed is None:
-            return
-
-        # Rotation fields are edited in degrees; store/apply radians.
-        value = radians(parsed) if channel == "ROT" else parsed
-        _schedule_set(channel, axis, value, self.space)
-
-        _syncing = True
-        try:
-            setattr(self, attrs[axis], f"{parsed:.6g}")
-        finally:
-            _syncing = False
+        _schedule_set(channel, axis, getattr(self, prop_name(channel, axis)), self.space)
 
     return _update
+
+
+def _make_mixed_text(channel: Channel, axis: int):
+    """Text field shown while the selection is mixed: reads "-", typing a number sets all."""
+
+    def _get(_self: "AbsoluteItemProps") -> str:
+        return _MIXED
+
+    def _set(self: "AbsoluteItemProps", text: str) -> None:
+        if channel == "LOC":
+            value = _parse_length(text, bpy.context.scene)
+        else:
+            value = _parse_number(text)
+            if value is not None and channel == "ROT":
+                value = radians(value)
+        if value is not None:
+            _schedule_set(channel, axis, value, self.space)
+
+    return _get, _set
 
 
 def _space_update(self: "AbsoluteItemProps", context: bpy.types.Context) -> None:
     sync_fields_from_selection(context, force=True)
 
 
-class AbsoluteItemProps(PropertyGroup):
-    space: EnumProperty(
-        name="Space",
-        description="Coordinate space used for absolute transform edits",
-        items=(
-            ("GLOBAL", "Global", "World space"),
-            ("LOCAL", "Local", "Object-local space"),
+def _float_property(channel: Channel, axis: int) -> FloatProperty:
+    common = dict(name="XYZ"[axis], update=_make_value_update(channel, axis))
+    if channel == "LOC":
+        return FloatProperty(subtype="DISTANCE", unit="LENGTH", **common)
+    if channel == "ROT":
+        return FloatProperty(subtype="ANGLE", unit="ROTATION", **common)
+    return FloatProperty(default=1.0, precision=3, **common)
+
+
+def _mixed_property(channel: Channel, axis: int) -> StringProperty:
+    getter, setter = _make_mixed_text(channel, axis)
+    return StringProperty(name="XYZ"[axis], get=getter, set=setter)
+
+
+def _build_annotations() -> dict:
+    annotations = {
+        "space": EnumProperty(
+            name="Space",
+            description="Coordinate space used for absolute transform edits",
+            items=(
+                ("GLOBAL", "Global", "World space"),
+                ("LOCAL", "Local", "Object-local space"),
+            ),
+            default="GLOBAL",
+            update=_space_update,
         ),
-        default="GLOBAL",
-        update=_space_update,
-    )
-
-    loc_x: StringProperty(name="X", default="", update=_make_channel_update("LOC", 0, _LOC_ATTRS))
-    loc_y: StringProperty(name="Y", default="", update=_make_channel_update("LOC", 1, _LOC_ATTRS))
-    loc_z: StringProperty(name="Z", default="", update=_make_channel_update("LOC", 2, _LOC_ATTRS))
-
-    rot_x: StringProperty(name="X", default="", update=_make_channel_update("ROT", 0, _ROT_ATTRS))
-    rot_y: StringProperty(name="Y", default="", update=_make_channel_update("ROT", 1, _ROT_ATTRS))
-    rot_z: StringProperty(name="Z", default="", update=_make_channel_update("ROT", 2, _ROT_ATTRS))
-
-    scale_x: StringProperty(
-        name="X", default="", update=_make_channel_update("SCALE", 0, _SCALE_ATTRS)
-    )
-    scale_y: StringProperty(
-        name="Y", default="", update=_make_channel_update("SCALE", 1, _SCALE_ATTRS)
-    )
-    scale_z: StringProperty(
-        name="Z", default="", update=_make_channel_update("SCALE", 2, _SCALE_ATTRS)
-    )
-
-    last_status: StringProperty(
-        name="Status",
-        default="",
-        options={"SKIP_SAVE"},
-    )
+        "last_status": StringProperty(name="Status", default="", options={"SKIP_SAVE"}),
+    }
+    for channel in _CHANNELS:
+        for axis in range(3):
+            annotations[prop_name(channel, axis)] = _float_property(channel, axis)
+            annotations[prop_name(channel, axis, mixed=True)] = _mixed_property(channel, axis)
+    return annotations
 
 
-def _sync_channel(
-    props: AbsoluteItemProps,
-    channel: Channel,
-    attrs: tuple[str, str, str],
-    displays: tuple,
-    *,
-    force: bool,
-    as_degrees: bool,
-) -> None:
-    texts = tuple(d.text(as_degrees=as_degrees) for d in displays)
+# Blender reads PropertyGroup properties from __annotations__.
+AbsoluteItemProps = type(
+    "AbsoluteItemProps",
+    (PropertyGroup,),
+    {"__annotations__": _build_annotations(), "__module__": __name__},
+)
 
-    if not force:
-        unchanged = True
-        for axis, attr, text in zip(range(3), attrs, texts):
-            if (channel, axis) in _pending:
-                continue
-            if getattr(props, attr) != text:
-                unchanged = False
-                break
-        if unchanged:
-            return
 
-    for axis, attr, text in zip(range(3), attrs, texts):
-        if not force and (channel, axis) in _pending:
+def _same(a: float, b: float) -> bool:
+    return abs(a - b) <= 1e-6 * max(1.0, abs(a), abs(b))
+
+
+def _sync_channel(props: AbsoluteItemProps, channel: Channel, displays: tuple, *, force: bool) -> bool:
+    """Copy the selection's values into the fields. Returns True if the panel needs a redraw."""
+    redraw = False
+    for axis, display in enumerate(displays):
+        key = (channel, axis)
+        if not force and key in _pending:
             continue
-        setattr(props, attr, text)
+        if not display.has_selection:
+            state = "none"
+        elif not display.uniform:
+            state = "mixed"
+        else:
+            state = "value"
+        if _state.get(key) != state:
+            _state[key] = state
+            redraw = True
+        if state == "value":
+            name = prop_name(channel, axis)
+            value = display.value + 0.0  # turns -0.0 into 0.0 so the field never shows "-0"
+            if not _same(getattr(props, name), value):
+                setattr(props, name, value)
+    return redraw
 
 
 def sync_fields_from_selection(
@@ -156,7 +195,7 @@ def sync_fields_from_selection(
     *,
     force: bool = False,
 ) -> None:
-    """Refresh transform fields from selection: value if uniform, '-' if mixed."""
+    """Refresh transform fields from selection: value if uniform, "-" if mixed."""
     global _syncing
 
     if context is None:
@@ -172,17 +211,20 @@ def sync_fields_from_selection(
 
     from . import apply
 
-    loc = apply.get_channel_displays(context, props.space, "LOC")
-    rot = apply.get_channel_displays(context, props.space, "ROT")
-    scale = apply.get_channel_displays(context, props.space, "SCALE")
-
+    redraw = False
     _syncing = True
     try:
-        _sync_channel(props, "LOC", _LOC_ATTRS, loc, force=force, as_degrees=False)
-        _sync_channel(props, "ROT", _ROT_ATTRS, rot, force=force, as_degrees=True)
-        _sync_channel(props, "SCALE", _SCALE_ATTRS, scale, force=force, as_degrees=False)
+        for channel in _CHANNELS:
+            displays = apply.get_channel_displays(context, props.space, channel)
+            redraw |= _sync_channel(props, channel, displays, force=force)
     finally:
         _syncing = False
+
+    if redraw:
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
 
 
 def schedule_sync(*, force: bool = False) -> None:

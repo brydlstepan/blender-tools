@@ -8,17 +8,36 @@ from bpy.types import Context, Panel
 from ..version import VERSION
 
 
+_LOCK_PROP = {"LOC": "lock_location", "ROT": "lock_rotation", "SCALE": "lock_scale"}
+
+
+def _draw_axis_rows(layout, props, channel, title, obj) -> None:
+    """One block like Item > Transform: "Title:" then X / Y / Z rows with the lock icon on the right."""
+    from .absolute_item import props as abs_props
+
+    layout.label(text=f"{title}:")
+    col = layout.column(align=True)
+    for axis in range(3):
+        row = col.row(align=True)
+        state = abs_props.axis_state(channel, axis)
+        if state == "mixed":
+            row.prop(props, abs_props.prop_name(channel, axis, mixed=True), text="XYZ"[axis])
+        else:
+            sub = row.row(align=True)
+            sub.enabled = state == "value"
+            sub.prop(props, abs_props.prop_name(channel, axis), text="XYZ"[axis])
+        if obj is not None:
+            row.prop(obj, _LOCK_PROP[channel], index=axis, text="", emboss=False)
+
+
 def _draw_absolute_transform(layout: bpy.types.UILayout, context: Context) -> None:
     props = getattr(context.scene, "blender_tools_absolute_item", None)
-    box = layout.box()
-    box.label(text="Absolute Transform", icon="ORIENTATION_GLOBAL")
-
     if props is None:
-        box.label(text="Reload Blender Tools add-on", icon="ERROR")
+        layout.label(text="Reload Blender Tools add-on", icon="ERROR")
         return
 
     if context.mode not in {"EDIT_MESH", "OBJECT"}:
-        box.label(text="Available in Object / Edit Mesh", icon="INFO")
+        layout.label(text="Available in Object / Edit Mesh", icon="INFO")
         return
 
     # Never write RNA from draw() — schedule sync instead.
@@ -26,39 +45,27 @@ def _draw_absolute_transform(layout: bpy.types.UILayout, context: Context) -> No
 
     abs_props.schedule_sync()
 
-    col = box.column(align=True)
-    col.prop(props, "space", expand=True)
+    layout.row().prop(props, "space", expand=True)
 
-    loc = box.column(align=True)
-    loc.label(text="Location")
-    loc.prop(props, "loc_x", text="X")
-    loc.prop(props, "loc_y", text="Y")
-    loc.prop(props, "loc_z", text="Z")
+    object_mode = context.mode == "OBJECT"
+    obj = context.object if object_mode else None
 
-    if context.mode == "OBJECT":
-        rot = box.column(align=True)
-        rot.label(text="Rotation")
-        rot.prop(props, "rot_x", text="X")
-        rot.prop(props, "rot_y", text="Y")
-        rot.prop(props, "rot_z", text="Z")
-
-        scale = box.column(align=True)
-        scale.label(text="Scale")
-        scale.prop(props, "scale_x", text="X")
-        scale.prop(props, "scale_y", text="Y")
-        scale.prop(props, "scale_z", text="Z")
+    layout.use_property_split = False
+    _draw_axis_rows(layout, props, "LOC", "Location", obj)
+    if object_mode:
+        _draw_axis_rows(layout, props, "ROT", "Rotation", obj)
+        _draw_axis_rows(layout, props, "SCALE", "Scale", obj)
     else:
-        hint = box.column()
+        hint = layout.column()
         hint.scale_y = 0.85
         hint.label(text="Rotation / Scale: Object mode", icon="INFO")
 
-    help_col = box.column()
-    help_col.scale_y = 0.85
-    help_col.label(text="Same value shown · mixed shows '-'")
-    help_col.label(text="Editing sets all selected absolutely")
+    hint = layout.column()
+    hint.scale_y = 0.85
+    hint.label(text="'-' = mixed. Type a value to set all.")
 
     if props.last_status:
-        box.label(text=props.last_status, icon="CHECKMARK")
+        layout.label(text=props.last_status, icon="CHECKMARK")
 
 
 class VIEW3D_PT_blender_tools_extended(Panel):
@@ -73,22 +80,15 @@ class VIEW3D_PT_blender_tools_extended(Panel):
 
         _draw_absolute_transform(layout, context)
 
-        box = layout.box()
-        box.label(text="Parenting", icon="LINKED")
-        col = box.column(align=True)
-        col.operator(
-            "blender_tools.clear_parent_keep_transform",
-            icon="X",
-        )
+        layout.separator()
+        layout.label(text="Parenting:")
+        layout.operator("blender_tools.clear_parent_keep_transform", icon="X")
 
         selected = context.selected_objects
         parented = sum(1 for obj in selected if obj.parent is not None)
-        help_col = box.column()
+        help_col = layout.column()
         help_col.scale_y = 0.85
-        help_col.label(
-            text=f"{parented}/{len(selected)} selected have a parent",
-            icon="INFO",
-        )
+        help_col.label(text=f"{parented}/{len(selected)} selected have a parent", icon="INFO")
 
         footer = layout.row()
         footer.alignment = "RIGHT"

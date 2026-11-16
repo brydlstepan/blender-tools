@@ -54,7 +54,7 @@ One-time setup: Settings → Pages → Source: **GitHub Actions**. The repo must
 
 #### Absolute Transform
 
-Replaces the awkward default **Item → Transform** median-offset behaviour.
+Replaces the awkward default **Item → Transform** median-offset behaviour. Laid out like the default Item panel (units, drag, lock icons next to each field).
 
 | Selection | Field shows |
 | --- | --- |
