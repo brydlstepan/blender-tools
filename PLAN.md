@@ -47,7 +47,9 @@ Push a version tag, and within a few minutes the Page shows the current version.
 
 ## Pipeline status
 
-Live: tag `vX.Y.Z` builds the zip, creates a GitHub Release and deploys the Page (`site/template.html`) at https://brydlstepan.github.io/blender-tools/. One-time setup that was needed: Pages source set to GitHub Actions, and a **tag** rule `v*` on the `github-pages` environment.
+Live since 0.6.2: pushing a tag `vX.Y.Z` builds the zip, creates a GitHub Release and deploys the Page (`site/template.html`) at https://brydlstepan.github.io/blender-tools/. Needed once: Pages source set to GitHub Actions, and a **tag** rule `v*` on the `github-pages` environment (a branch rule does not match tags). The workflow downloads Blender from three mirrors because download.blender.org once answered 403 to the runner.
+
+Not verified: dragging the button into Blender 5.2, and how the page looks in a browser.
 
 ## Audit findings (2026-11-16)
 
