@@ -26,6 +26,16 @@ python -m unittest discover tests
 
 Tests cover the code that does not need Blender (Unreal conversions and the remote-execution wire format). The version lives only in `blender_manifest.toml`.
 
+## Release
+
+Pushing a version tag publishes a new version:
+
+1. Bump `version` in `blender_manifest.toml` and commit.
+2. `git tag v0.6.1 && git push origin main v0.6.1` (the tag must match the manifest, or the run fails).
+3. The `Release` workflow runs the tests, builds the zip with Blender 5.2, creates a GitHub Release, and redeploys the Page at `https://brydlstepan.github.io/blender-tools/`.
+
+One-time setup: Settings → Pages → Source: **GitHub Actions**. The repo must be public for Pages on a free plan.
+
 ## Layout
 
 | Path | What |

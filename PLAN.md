@@ -45,6 +45,10 @@ Push a version tag, and within a few minutes the Page shows the current version.
 3. The page has two links: the zip URL (drag onto Blender to install) and a `blender://` add-repository link (Blender then offers updates).
 4. The same run also makes a GitHub Release with the zip attached. The tag must match `version` in the manifest, and the workflow fails if it doesn't.
 
+## Pipeline status
+
+Built, not yet run on GitHub: `.github/workflows/release.yml` (tag-triggered) and `site/template.html` (the install page, filled by `server-generate --html`). Verified locally: the build, the repository index and the page. Not verified: the Actions run itself and Pages deployment.
+
 ## Audit findings (2026-11-16)
 
 Status: all done in version 0.6.0 except 6 (deferred, decision 7). Also fixed along the way: Clear Parent baked float noise (1e-7) into the mesh and made its data unique.
