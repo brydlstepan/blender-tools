@@ -5,18 +5,39 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Blender Tools</title>
 <style>
-  :root { --bg: #ffffff; --fg: #1d1d1f; --muted: #5f6368; --card: #f3f4f6; --accent: #1a5fd0; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #1b1c1f; --fg: #ececee; --muted: #9aa0a6; --card: #26282c; --accent: #6ea8ff; }
+  /* Tokens follow blender.org: accent hsl(204 100% 50%), radius .6rem, Inter. */
+  :root {
+    --bg: #f2f3f4; --fg: #3a3c42; --muted: #7d8189; --card: #f9fafa;
+    --accent: hsl(204 100% 50%); --accent-bg: hsl(204 100% 50% / .1); --accent-bg-hover: hsl(204 100% 50% / .2);
+    --radius: 6px; --radius-lg: 12px;
   }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #292d32; --fg: #e4e6ea; --muted: #9aa0a8; --card: #31363c; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
   main { max-width: 42rem; margin: 0 auto; padding: 2rem 1rem 4rem; }
   h1 { margin-bottom: .25rem; }
+  h2 { margin-top: 0; }
+  .alt a { color: inherit; text-decoration: underline; text-underline-offset: .2rem; }
   .muted { color: var(--muted); }
   ol { padding-left: 1.2rem; }
   code { background: var(--card); padding: .1rem .35rem; border-radius: 4px; word-break: break-all; }
   a { color: var(--accent); }
-  .card { background: var(--card); border-radius: 8px; padding: 1rem 1.25rem; margin: 1.5rem 0; }
+  .card { background: var(--card); border-radius: var(--radius-lg); padding: 1.5rem; margin: 1.5rem 0; box-shadow: rgba(149, 157, 165, .2) 0 8px 24px; }
+  .btn-install-drag {
+    display: inline-flex; align-items: center; gap: .6rem; position: relative;
+    padding: 4px 24px; line-height: 32px; white-space: nowrap;
+    font-weight: 500; text-align: center; text-decoration: none; user-select: none; cursor: move;
+    color: var(--accent); background-color: var(--accent-bg); border-radius: var(--radius);
+    outline: 2px dashed currentColor; outline-offset: -2px;
+    transition: background-color 150ms ease-out, transform 80ms ease-out;
+  }
+  .btn-install-drag:hover { background-color: var(--accent-bg-hover); }
+  .btn-install-drag:focus-visible { outline-style: solid; }
+  .btn-install-drag svg { width: 1.1em; height: 1.1em; flex: none; }
+  .btn-install-drag { margin-bottom: .75rem; }
+  details { margin-top: 1rem; }
+  summary { cursor: pointer; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -24,14 +45,20 @@
   <h1>Blender Tools</h1>
   <p class="muted">Viewport tools for Blender 5.2+: absolute transform, clear parent, separate FBX export, Unreal import.</p>
 
-  <h2>Install</h2>
-  <ol>
-    <li>Open Blender 5.2 or newer.</li>
-    <li>Drag the extension link below onto the Blender window.</li>
-    <li>Confirm the install and enable <b>Blender Tools</b>.</li>
-  </ol>
-
-  <div class="card">${body}</div>
+  <div class="card">
+    <h2>Add-on</h2>
+    <p>Install Blender Tools into Blender 5.2 or newer.</p>
+    <a href="__ZIP_URL__" class="btn-install-drag" draggable="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/></svg>
+      <span>Drag and Drop into Blender</span>
+    </a>
+    <p class="alt">...or <a href="__ZIP_FILE__">download</a> and <a href="https://docs.blender.org/manual/en/latest/editors/preferences/extensions.html">Install from Disk</a></p>
+    <p>If you drag &amp; drop into Blender <b>you will need to do it twice</b>. First to add this repository, secondly to install the add-on itself. This method lets you receive update notifications whenever a new version of the add-on is available.</p>
+    <details>
+      <summary>All files</summary>
+      ${body}
+    </details>
+  </div>
 
   <h2>Get updates inside Blender</h2>
   <p>Preferences → Get Extensions → Repositories → <b>+</b> → Add Remote Repository, then paste the repository link: copy the address of this page and add <code>index.json</code> at the end.</p>

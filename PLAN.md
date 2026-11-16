@@ -47,7 +47,7 @@ Push a version tag, and within a few minutes the Page shows the current version.
 
 ## Pipeline status
 
-Built, not yet run on GitHub: `.github/workflows/release.yml` (tag-triggered) and `site/template.html` (the install page, filled by `server-generate --html`). Verified locally: the build, the repository index and the page. Not verified: the Actions run itself and Pages deployment.
+Live: tag `vX.Y.Z` builds the zip, creates a GitHub Release and deploys the Page (`site/template.html`) at https://brydlstepan.github.io/blender-tools/. One-time setup that was needed: Pages source set to GitHub Actions, and a **tag** rule `v*` on the `github-pages` environment.
 
 ## Audit findings (2026-11-16)
 

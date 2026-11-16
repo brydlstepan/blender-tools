@@ -61,6 +61,17 @@ jobs:
           mkdir -p dist
           ~/blender/blender --command extension build --source-dir . --output-dir dist
           ~/blender/blender --command extension server-generate --repo-dir dist --html --html-template site/template.html
+          # Point the drag-and-drop button at the built zip (same link format Blender generates).
+          python3 - <<'PY'
+          import glob, os, tomllib
+          zip_name = os.path.basename(glob.glob("dist/*.zip")[0])
+          minimum = tomllib.load(open("blender_manifest.toml", "rb"))["blender_version_min"]
+          url = f"./{zip_name}?repository=.%2Findex.json&blender_version_min={minimum}"
+          page = open("dist/index.html", encoding="utf-8").read()
+          assert "__ZIP_URL__" in page and "__ZIP_FILE__" in page
+          page = page.replace("__ZIP_URL__", url.replace("&", "&amp;")).replace("__ZIP_FILE__", f"./{zip_name}")
+          open("dist/index.html", "w", encoding="utf-8").write(page)
+          PY
           ls -l dist
 
       - uses: actions/upload-pages-artifact@v3
