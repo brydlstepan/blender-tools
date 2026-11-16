@@ -50,7 +50,7 @@ One-time setup: Settings → Pages → Source: **GitHub Actions**. The repo must
 
 ### Extended Tools (`Extended Tools` sidebar)
 
-**Where:** 3D Viewport → Sidebar (`N`) → **Item Extended** (absolute transform) and **Extended Tools** (parenting, version tag bottom-right)
+**Where:** 3D Viewport → Sidebar (`N`) → **Item** (an *Absolute Transform* panel under Blender's own Transform) and **Extended Tools** (parenting, version tag bottom-right)
 
 #### Absolute Transform
 
