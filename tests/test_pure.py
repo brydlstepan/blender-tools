@@ -88,6 +88,78 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(checks.project_plugin_problems("Z:/definitely/not/here"), [])
 
 
+class _V:
+    def __init__(self):
+        self.link_edges = []
+
+
+class _E:
+    def __init__(self, a, b):
+        self.verts = (a, b)
+        self.link_faces = []
+        a.link_edges.append(self)
+        b.link_edges.append(self)
+
+    def other_vert(self, v):
+        return self.verts[1] if v is self.verts[0] else self.verts[0]
+
+
+class _F:
+    def __init__(self, edges):
+        self.edges = edges
+        self.verts = list({v for e in edges for v in e.verts})
+        for e in edges:
+            e.link_faces.append(self)
+
+
+def _grid(cols, rows):
+    """Quad grid; returns (vertical edges by column, all edges)."""
+    v = [[_V() for _ in range(cols + 1)] for _ in range(rows + 1)]
+    vert = {}
+    horiz = {}
+    for r in range(rows + 1):
+        for c in range(cols):
+            horiz[r, c] = _E(v[r][c], v[r][c + 1])
+    for r in range(rows):
+        for c in range(cols + 1):
+            vert[r, c] = _E(v[r][c], v[r + 1][c])
+    for r in range(rows):
+        for c in range(cols):
+            _F([horiz[r, c], horiz[r + 1, c], vert[r, c], vert[r, c + 1]])
+    columns = [{vert[r, c] for r in range(rows)} for c in range(cols + 1)]
+    return columns
+
+
+class LoopTests(unittest.TestCase):
+    loops = _load("loops", "extended_tools/loops.py")
+
+    def test_skip_one_selects_every_second_loop(self):
+        cols = _grid(10, 3)
+        got = self.loops.next_loops(cols[1] | cols[3], history=[next(iter(cols[3]))])
+        self.assertEqual(got, cols[5] | cols[7] | cols[9])
+
+    def test_adjacent_loops_select_all_the_rest(self):
+        cols = _grid(5, 2)
+        got = self.loops.next_loops(cols[0] | cols[1], history=[next(iter(cols[1]))])
+        self.assertEqual(got, cols[2] | cols[3] | cols[4] | cols[5])
+
+    def test_direction_follows_first_to_second(self):
+        cols = _grid(10, 2)
+        got = self.loops.next_loops(cols[8] | cols[6], history=[next(iter(cols[6]))])
+        self.assertEqual(got, cols[4] | cols[2] | cols[0])
+
+    def test_count_limits_result(self):
+        cols = _grid(10, 2)
+        self.assertEqual(self.loops.next_loops(cols[1] | cols[3], 1, [next(iter(cols[3]))]), cols[5])
+
+    def test_needs_exactly_two_loops(self):
+        cols = _grid(6, 2)
+        with self.assertRaises(ValueError):
+            self.loops.next_loops(cols[1])
+        with self.assertRaises(ValueError):
+            self.loops.next_loops(cols[0] | cols[2] | cols[4])
+
+
 class MessageTests(unittest.TestCase):
     def test_timeout_message_names_the_seconds_and_the_preference(self):
         # The text a user reads when Unreal takes too long.

@@ -75,6 +75,12 @@ Replaces the awkward default **Item → Transform** median-offset behaviour. Lai
 | --- | --- |
 | Clear Parent (Keep Transform) | Clears parents on all selected objects with exact world placement |
 
+#### Loops
+
+| Tool | What it does |
+| --- | --- |
+| Select Next Loops | Edit Mesh: select loop 1, skip any number of loops, then select loop 2 (last). Click the button to select every following loop at the same spacing. Redo panel `Count` limits how many (0 = to the end) |
+
 ### Separate FBX Export
 
 Exports **each object to its own `.fbx`**.

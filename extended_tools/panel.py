@@ -94,6 +94,13 @@ class VIEW3D_PT_blender_tools_extended(Panel):
         help_col.scale_y = 0.85
         help_col.label(text=f"{parented}/{len(selected)} selected have a parent", icon="INFO")
 
+        layout.separator()
+        layout.label(text="Loops:")
+        layout.operator("blender_tools.select_next_loops", icon="MOD_ARRAY")
+        loop_help = layout.column()
+        loop_help.scale_y = 0.85
+        loop_help.label(text="Edit Mesh: select loop 1, skip, loop 2", icon="INFO")
+
         footer = layout.row()
         footer.alignment = "RIGHT"
         footer.label(text=VERSION)
