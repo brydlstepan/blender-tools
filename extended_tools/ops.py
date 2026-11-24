@@ -111,14 +111,122 @@ def _uv_borders(bm, faces) -> set:
     return unsubdivide.uv_border_edges(faces, lambda loop: loop[uv_layer].uv)
 
 
+class BLENDERTOOLS_OT_fix_quad_topology(Operator):
+    """Check quad topology, fix diagonal triangle pairs and slanted parallelogram chains, and select any remaining non-quads"""
+
+    bl_idname = "blender_tools.fix_quad_topology"
+    bl_label = "Fix Quad Topology"
+    bl_description = (
+        "Check quad topology and auto-fix diagonally split quad triangles and slanted parallelogram "
+        "chains without crossing UV island borders; selects any remaining unfixable non-quads"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: Context) -> bool:
+        return context.mode == "EDIT_MESH" and context.edit_object is not None
+
+    def execute(self, context: Context):
+        me = context.edit_object.data
+        bm = bmesh.from_edit_mesh(me)
+
+        visible = [f for f in bm.faces if not f.hide]
+        selected_only = any(f.select for f in visible)
+        target = [f for f in visible if f.select] if selected_only else visible
+        if not target:
+            self.report({"WARNING"}, "No visible faces to check")
+            return {"CANCELLED"}
+
+        uv_borders = _uv_borders(bm, target)
+        total_pairs = 0
+        total_chains = 0
+
+        for _ in range(8):
+            visible = [f for f in bm.faces if not f.hide]
+            cur_target = [f for f in visible if f.select] if selected_only else visible
+            uv_borders = {e for e in uv_borders if e.is_valid}
+
+            diagonals = unsubdivide.find_fixable_diagonals(
+                cur_target,
+                uv_borders,
+                edge_length=lambda e: e.calc_length(),
+            )
+            if diagonals:
+                bmesh.ops.dissolve_edges(
+                    bm,
+                    edges=diagonals,
+                    use_verts=False,
+                    use_face_split=False,
+                )
+                total_pairs += len(diagonals)
+                visible = [f for f in bm.faces if not f.hide]
+                cur_target = [f for f in visible if f.select] if selected_only else visible
+                uv_borders = {e for e in uv_borders if e.is_valid}
+
+            chains = unsubdivide.find_slanted_chains(
+                cur_target,
+                uv_borders,
+                edge_length=lambda e: e.calc_length(),
+                vert_dist=lambda u, v: (u.co - v.co).length,
+                has_edge=lambda u, v: bm.edges.get((u, v)) is not None,
+            )
+            chains_done = 0
+            for edges, new_pairs in chains:
+                if any(not e.is_valid for e in edges):
+                    continue
+                bmesh.ops.dissolve_edges(
+                    bm,
+                    edges=edges,
+                    use_verts=False,
+                    use_face_split=False,
+                )
+                for u, v in new_pairs:
+                    if u.is_valid and v.is_valid:
+                        bmesh.ops.connect_vert_pair(bm, verts=[u, v])
+                chains_done += 1
+            total_chains += chains_done
+
+            if not diagonals and not chains_done:
+                break
+
+        visible = [f for f in bm.faces if not f.hide]
+        final_target = [f for f in visible if f.select] if selected_only else visible
+        non_quads = [f for f in final_target if len(f.verts) != 4]
+        changed = bool(total_pairs or total_chains)
+
+        if non_quads:
+            _select_problem_faces(bm, non_quads)
+            bmesh.update_edit_mesh(me, loop_triangles=changed, destructive=changed)
+            if changed:
+                self.report(
+                    {"WARNING"},
+                    f"Fixed {total_pairs} pair(s), {total_chains} chain(s); "
+                    f"{len(non_quads)} unfixable non-quad(s) selected",
+                )
+            else:
+                self.report({"WARNING"}, f"Found {len(non_quads)} unfixable non-quad(s) (selected)")
+            return {"FINISHED"}
+
+        if changed:
+            bm.select_flush_mode()
+            bmesh.update_edit_mesh(me, loop_triangles=True, destructive=True)
+            self.report(
+                {"INFO"},
+                f"Fixed {total_pairs} pair(s), {total_chains} chain(s) — quad topology is clean",
+            )
+        else:
+            self.report({"INFO"}, "Quad topology is already clean (0 non-quads)")
+        return {"FINISHED"}
+
+
 class BLENDERTOOLS_OT_unsubdivide_safe(Operator):
     """Un-subdivide one level while preserving UV island borders; abort and select problems on conflict"""
 
     bl_idname = "blender_tools.unsubdivide_safe"
     bl_label = "UV-Safe Un-Subdivide"
     bl_description = (
-        "Un-subdivide one level while preserving UV island borders (auto-fixes diagonally split quad "
-        "triangles); aborts without modifying the mesh and selects unfixable areas on conflict"
+        "Un-subdivide one level while preserving actual UV island borders; "
+        "aborts without modifying the mesh and selects non-quads or blocked faces on conflict"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -137,35 +245,8 @@ class BLENDERTOOLS_OT_unsubdivide_safe(Operator):
             self.report({"WARNING"}, "No visible faces to un-subdivide")
             return {"CANCELLED"}
 
-        uv_borders = _uv_borders(bm, target)
         try:
-            diagonals = unsubdivide.find_triangle_diagonals(
-                target,
-                uv_borders,
-                edge_length=lambda e: e.calc_length(),
-            )
-            if diagonals:
-                # Validate on a copy first so bm stays untouched if un-subdivision still fails.
-                bm.edges.index_update()
-                diag_indices = [e.index for e in diagonals]
-                tmp = bm.copy()
-                try:
-                    tmp.edges.ensure_lookup_table()
-                    bmesh.ops.dissolve_edges(
-                        tmp,
-                        edges=[tmp.edges[i] for i in diag_indices],
-                        use_verts=False,
-                        use_face_split=False,
-                    )
-                    tmp_vis = [f for f in tmp.faces if not f.hide]
-                    tmp_target = [f for f in tmp_vis if f.select] if selected_only else tmp_vis
-                    unsubdivide.plan_unsubdivide(tmp_target, _uv_borders(tmp, tmp_target))
-                except unsubdivide.UnsubdivideError as err:
-                    raise unsubdivide.UnsubdivideError(str(err), target) from None
-                finally:
-                    tmp.free()
-            else:
-                plan = unsubdivide.plan_unsubdivide(target, uv_borders)
+            plan = unsubdivide.plan_unsubdivide(target, _uv_borders(bm, target))
         except unsubdivide.UnsubdivideError as err:
             _select_problem_faces(bm, err.problem_faces)
             bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
@@ -174,19 +255,6 @@ class BLENDERTOOLS_OT_unsubdivide_safe(Operator):
 
         before_target = len(target)
         before_total = len(bm.faces)
-        fixed_tris = 0
-
-        if diagonals:
-            fixed_tris = len(diagonals) * 2
-            bmesh.ops.dissolve_edges(
-                bm,
-                edges=diagonals,
-                use_verts=False,
-                use_face_split=False,
-            )
-            visible = [f for f in bm.faces if not f.hide]
-            target = [f for f in visible if f.select] if selected_only else visible
-            plan = unsubdivide.plan_unsubdivide(target, _uv_borders(bm, target))
 
         if plan.face_centers:
             bmesh.ops.dissolve_verts(
@@ -214,8 +282,7 @@ class BLENDERTOOLS_OT_unsubdivide_safe(Operator):
         after_target = before_target - (before_total - len(bm.faces))
         bm.select_flush_mode()
         bmesh.update_edit_mesh(me, loop_triangles=True, destructive=True)
-        prefix = f"Fixed {fixed_tris} triangle(s), u" if fixed_tris else "U"
-        self.report({"INFO"}, f"{prefix}n-subdivided {before_target} -> {after_target} quads")
+        self.report({"INFO"}, f"Un-subdivided {before_target} -> {after_target} quads")
         return {"FINISHED"}
 
 
@@ -302,40 +369,9 @@ class BLENDERTOOLS_OT_adaptive_quad_remesh(Operator):
             self.report({"WARNING"}, "No visible faces to remesh")
             return {"CANCELLED"}
 
-        uv_borders = _uv_borders(bm, target)
         try:
-            diagonals = unsubdivide.find_triangle_diagonals(
-                target,
-                uv_borders,
-                edge_length=lambda e: e.calc_length(),
-            )
-            if diagonals:
-                bm.edges.index_update()
-                diag_indices = [e.index for e in diagonals]
-                tmp = bm.copy()
-                try:
-                    tmp.edges.ensure_lookup_table()
-                    bmesh.ops.dissolve_edges(
-                        tmp,
-                        edges=[tmp.edges[i] for i in diag_indices],
-                        use_verts=False,
-                        use_face_split=False,
-                    )
-                    tmp_vis = [f for f in tmp.faces if not f.hide]
-                    tmp_target = [f for f in tmp_vis if f.select] if selected_only else tmp_vis
-                    if not adaptive_remesh.extract_strips(tmp_target, _uv_borders(tmp, tmp_target)):
-                        raise unsubdivide.UnsubdivideError(
-                            "No dissolvable quad loop strips found", tmp_target
-                        )
-                except unsubdivide.UnsubdivideError as err:
-                    raise unsubdivide.UnsubdivideError(str(err), target) from None
-                finally:
-                    tmp.free()
-            else:
-                if not adaptive_remesh.extract_strips(target, uv_borders):
-                    raise unsubdivide.UnsubdivideError(
-                        "No dissolvable quad loop strips found", target
-                    )
+            if not adaptive_remesh.extract_strips(target, _uv_borders(bm, target)):
+                raise unsubdivide.UnsubdivideError("No dissolvable quad loop strips found", target)
         except unsubdivide.UnsubdivideError as err:
             _select_problem_faces(bm, err.problem_faces)
             bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
@@ -344,17 +380,6 @@ class BLENDERTOOLS_OT_adaptive_quad_remesh(Operator):
 
         before_target = len(target)
         before_total = len(bm.faces)
-        fixed_tris = 0
-
-        if diagonals:
-            fixed_tris = len(diagonals) * 2
-            bmesh.ops.dissolve_edges(
-                bm,
-                edges=diagonals,
-                use_verts=False,
-                use_face_split=False,
-            )
-
         ratio = self.reduction / 100.0
         processed_edges: set = set()
         strips_done = 0
@@ -398,10 +423,9 @@ class BLENDERTOOLS_OT_adaptive_quad_remesh(Operator):
         after_target = before_target - (before_total - len(bm.faces))
         bm.select_flush_mode()
         bmesh.update_edit_mesh(me, loop_triangles=True, destructive=True)
-        prefix = f"Fixed {fixed_tris} triangle(s), r" if fixed_tris else "R"
         self.report(
             {"INFO"},
-            f"{prefix}emeshed {strips_done} strip(s): {before_target} -> {after_target} quads",
+            f"Remeshed {strips_done} strip(s): {before_target} -> {after_target} quads",
         )
         return {"FINISHED"}
 
@@ -409,6 +433,7 @@ class BLENDERTOOLS_OT_adaptive_quad_remesh(Operator):
 classes = (
     BLENDERTOOLS_OT_clear_parent_keep_transform,
     BLENDERTOOLS_OT_select_next_loops,
+    BLENDERTOOLS_OT_fix_quad_topology,
     BLENDERTOOLS_OT_unsubdivide_safe,
     BLENDERTOOLS_OT_adaptive_quad_remesh,
 )

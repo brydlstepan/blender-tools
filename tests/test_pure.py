@@ -440,9 +440,8 @@ class UnsubdivideTests(unittest.TestCase):
         t2 = _F([diag, edge_map[frozenset((v2, v3))], edge_map[frozenset((v3, v0))]], verts=[v0, v2, v3])
         return diag, t1, t2
 
-    def test_find_triangle_diagonals_fixes_isolated_and_adjacent_split_quads(self):
+    def test_find_fixable_diagonals_fixes_isolated_and_adjacent_split_quads(self):
         _, _, _, faces_2d = _quad_grid(4, 4)
-        # Split an isolated quad (0,0) and an adjacent pair (2,1) & (2,2) (a 4-triangle component).
         splits = [(0, 0), (2, 1), (2, 2)]
         expected_diags = set()
         replaced = set()
@@ -453,27 +452,71 @@ class UnsubdivideTests(unittest.TestCase):
             expected_diags.add(diag)
             new_tris.extend((t1, t2))
         faces = [f for row in faces_2d for f in row if f not in replaced] + new_tris
-        got = self.unsub.find_triangle_diagonals(faces)
+        got = self.unsub.find_fixable_diagonals(faces)
         self.assertEqual(set(got), expected_diags)
 
-    def test_find_triangle_diagonals_respects_uv_borders_and_rejects_unfixable(self):
+    def test_find_fixable_diagonals_respects_uv_borders(self):
         _, _, _, faces_2d = _quad_grid(4, 4)
         diag, t1, t2 = self._split_quad_in_grid(faces_2d, 1, 1)
         faces = [f for row in faces_2d for f in row if f is not faces_2d[1][1]] + [t1, t2]
-        # Protecting the diagonal as a UV border makes the pair unfixable.
-        with self.assertRaises(self.unsub.UnsubdivideError) as ctx:
-            self.unsub.find_triangle_diagonals(faces, protected_edges={diag})
-        self.assertEqual(set(ctx.exception.problem_faces), {t1, t2})
+        # Protecting the diagonal as a UV border leaves 0 fixable diagonals.
+        self.assertEqual(self.unsub.find_fixable_diagonals(faces, protected_edges={diag}), [])
 
-    def test_find_triangle_diagonals_rejects_odd_triangle_and_selects_only_unfixable(self):
-        _, _, _, faces_2d = _quad_grid(4, 4)
-        _, t1, t2 = self._split_quad_in_grid(faces_2d, 0, 0)
-        a, b, c = _V(), _V(), _V()
-        lone_tri = _F([_E(a, b), _E(b, c), _E(c, a)], verts=[a, b, c])
-        faces = [f for row in faces_2d for f in row if f is not faces_2d[0][0]] + [t1, t2, lone_tri]
-        with self.assertRaises(self.unsub.UnsubdivideError) as ctx:
-            self.unsub.find_triangle_diagonals(faces)
-        self.assertEqual(ctx.exception.problem_faces, [lone_tri])
+    def test_find_fixable_diagonals_partially_fixes_odd_cluster(self):
+        # 3-triangle cluster (1 split quad + 1 adjacent lone triangle): fixes the split quad diagonal.
+        verts, _, _, faces_2d = _quad_grid(4, 4)
+        diag, t1, t2 = self._split_quad_in_grid(faces_2d, 1, 1)
+        # Also split (1, 2) so we have 4 tris, then remove one outer tri to leave a 3-tri cluster.
+        diag2, t3, t4 = self._split_quad_in_grid(faces_2d, 1, 2)
+        faces = [
+            f for row in faces_2d for f in row if f not in {faces_2d[1][1], faces_2d[1][2]}
+        ] + [t1, t2, t3]
+        got = self.unsub.find_fixable_diagonals(faces)
+        self.assertEqual(len(got), 1)
+        self.assertIn(got[0], {diag, diag2})
+
+    def test_find_slanted_chains_detects_missing_grid_edge_parallelogram(self):
+        # Build a 4x4 grid where stacked quads (1,1) and (2,1) were wrongly merged by Tris-to-Quads:
+        # horizontal grid edge between (v[2][1], v[2][2]) is missing, replaced by two diagonals
+        # (v[2][1], v[1][2]) and (v[3][1], v[2][2]), leaving t1, slanted q_mid, t2.
+        import math
+        verts, _, _, faces_2d = _quad_grid(4, 4)
+        coords = {verts[r][c]: (float(c), float(r)) for r in range(5) for c in range(5)}
+        q_bot = faces_2d[1][1]  # verts: (1,1), (1,2), (2,2), (2,1)
+        q_top = faces_2d[2][1]  # verts: (2,1), (2,2), (3,2), (3,1)
+        v_bot_l, v_bot_r = verts[1][1], verts[1][2]
+        v_mid_l, v_mid_r = verts[2][1], verts[2][2]
+        v_top_l, v_top_r = verts[3][1], verts[3][2]
+
+        # Remove q_bot, q_top and the horizontal edge (v_mid_l, v_mid_r).
+        edge_map = {frozenset(e.verts): e for q in (q_bot, q_top) for e in q.edges}
+        mid_e = edge_map[frozenset((v_mid_l, v_mid_r))]
+        for q in (q_bot, q_top):
+            for e in q.edges:
+                e.link_faces.remove(q)
+            for v in q.verts:
+                v.link_faces.remove(q)
+        v_mid_l.link_edges.remove(mid_e)
+        v_mid_r.link_edges.remove(mid_e)
+
+        # Create the two slanted diagonals and the 3 defect faces (t1, q_mid, t2).
+        d1 = _E(v_mid_l, v_bot_r)
+        d2 = _E(v_top_l, v_mid_r)
+        t1 = _F([edge_map[frozenset((v_bot_l, v_bot_r))], d1, edge_map[frozenset((v_bot_l, v_mid_l))]], verts=[v_bot_l, v_bot_r, v_mid_l])
+        q_mid = _F([d1, edge_map[frozenset((v_bot_r, v_mid_r))], d2, edge_map[frozenset((v_top_l, v_mid_l))]], verts=[v_mid_l, v_bot_r, v_mid_r, v_top_l])
+        t2 = _F([d2, edge_map[frozenset((v_mid_r, v_top_r))], edge_map[frozenset((v_top_r, v_top_l))]], verts=[v_top_l, v_mid_r, v_top_r])
+
+        faces = [f for row in faces_2d for f in row if f not in {q_bot, q_top}] + [t1, q_mid, t2]
+        vdist = lambda u, v: math.hypot(coords[u][0] - coords[v][0], coords[u][1] - coords[v][1])
+        elen = lambda e: vdist(e.verts[0], e.verts[1])
+        has_e = lambda u, v: any(e.other_vert(u) is v for e in u.link_edges)
+
+        chains = self.unsub.find_slanted_chains(faces, edge_length=elen, vert_dist=vdist, has_edge=has_e)
+        self.assertEqual(len(chains), 1)
+        dissolve_edges, new_pairs = chains[0]
+        self.assertEqual(set(dissolve_edges), {d1, d2})
+        self.assertEqual(len(new_pairs), 1)
+        self.assertEqual(frozenset(new_pairs[0]), frozenset((v_mid_l, v_mid_r)))
 
 
 class AdaptiveRemeshTests(unittest.TestCase):

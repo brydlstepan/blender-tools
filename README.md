@@ -85,8 +85,9 @@ Replaces the awkward default **Item → Transform** median-offset behaviour. Lai
 
 | Tool | What it does |
 | --- | --- |
-| UV-Safe Un-Subdivide | Edit Mesh: un-subdivides one level on selected faces (or all visible faces if none selected) while keeping actual UV island borders intact (auto-fixes diagonally split quad triangles, and keeps one un-merged quad strip on odd spans). Aborts without modifying the mesh and selects the problematic faces if unfixable triangles, n-gons, or un-reducible topology remain |
-| Adaptive Quad Reduce | Edit Mesh: reduces and slides quad edge loops smoothly along the surface while keeping 100% quads and actual UV island borders. Redo panel `Reduction` (0–95% loops removed; 0% slides only) and `Uniformity` (1 = even arc-length spacing, 0 = dense loops on detailed/curved areas and wider loops on flat areas) |
+| Fix Quad Topology | Edit Mesh: checks quad topology and auto-fixes diagonally split quad triangles and slanted parallelogram chains (two triangles separated by slanted quads with a missing grid edge) while keeping actual UV island borders intact; selects any remaining unfixable non-quads |
+| UV-Safe Un-Subdivide | Edit Mesh: un-subdivides one level on clean quads (selected faces, or all visible faces if none selected) while keeping actual UV island borders intact (odd quad spans keep one un-merged quad strip). Aborts without modifying the mesh and selects any non-quads or un-reducible faces |
+| Adaptive Quad Reduce | Edit Mesh: reduces and slides quad edge loops smoothly along the surface on clean quads while keeping 100% quads and actual UV island borders. Redo panel (`F9`): `Reduction` (0–95% loops removed; 0% slides only) and `Uniformity` (1 = even arc-length spacing, 0 = dense loops on detailed/curved areas and wider loops on flat areas) |
 
 ### Separate FBX Export
 

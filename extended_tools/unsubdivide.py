@@ -275,16 +275,53 @@ def _match_triangle_component(comp: list, adj: dict, edge_length) -> list | None
     return chosen
 
 
-def find_triangle_diagonals(faces, protected_edges=(), edge_length=None) -> list:
-    """Find interior diagonal edges whose dissolution merges every triangle pair into a quad.
+def _ideal_val(vert) -> int:
+    return 3 if _is_boundary_vert(vert) else 4
 
-    Never crosses `protected_edges` (e.g. UV island borders). Raises UnsubdivideError with only the
-    n-gons and unfixable triangles if any non-quad cannot be cleanly paired.
+
+def _match_odd_or_partial(comp: list, adj: dict, edge_length) -> list:
+    """Best-effort diagonal pairing inside odd/irregular triangle clusters without dissolving grid edges."""
+    rem = set(comp)
+    dec = Counter()
+    chosen: list = []
+    while rem:
+        best_pick = None
+        best_key = None
+        for tf in rem:
+            for nb, edge in adj[tf]:
+                if nb not in rem or id(tf) >= id(nb):
+                    continue
+                v0, v1 = edge.verts
+                over0 = (len(v0.link_edges) - dec[v0]) - _ideal_val(v0)
+                over1 = (len(v1.link_edges) - dec[v1]) - _ideal_val(v1)
+                # Never dissolve an edge if neither endpoint is over-valent (that is a grid edge).
+                if over0 <= 0 and over1 <= 0:
+                    continue
+                both_over = 1 if (over0 > 0 and over1 > 0) else 0
+                length = edge_length(edge) if edge_length is not None else 0.0
+                key = (both_over, over0 + over1, length)
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best_pick = (tf, nb, edge)
+        if best_pick is None:
+            break
+        tf, nb, edge = best_pick
+        rem.remove(tf)
+        rem.remove(nb)
+        chosen.append(edge)
+        dec[edge.verts[0]] += 1
+        dec[edge.verts[1]] += 1
+    return chosen
+
+
+def find_fixable_diagonals(faces, protected_edges=(), edge_length=None) -> list:
+    """Find interior diagonal edges that cleanly merge triangle pairs into quads (best-effort).
+
+    Never crosses `protected_edges` (e.g. UV island borders). Solves even clusters exactly and
+    applies valence-safe partial matching inside odd clusters so remaining lone triangles are exposed.
     """
-    target = list(faces)
-    ngons = [f for f in target if len(f.verts) > 4]
-    tris = [f for f in target if len(f.verts) == 3]
-    if not tris and not ngons:
+    tris = [f for f in faces if len(f.verts) == 3]
+    if len(tris) < 2:
         return []
 
     protected_set = set(protected_edges)
@@ -304,7 +341,6 @@ def find_triangle_diagonals(faces, protected_edges=(), edge_length=None) -> list
 
     visited: set = set()
     diagonals: list = []
-    unfixable: list = []
     for f in tris:
         if f in visited:
             continue
@@ -318,17 +354,130 @@ def find_triangle_diagonals(faces, protected_edges=(), edge_length=None) -> list
                 if nb not in visited:
                     visited.add(nb)
                     queue.append(nb)
-        matched = _match_triangle_component(comp, adj, edge_length)
-        if matched is None:
-            unfixable.extend(comp)
-        else:
-            diagonals.extend(matched)
-
-    if ngons or unfixable:
-        bad = ngons + unfixable
-        raise UnsubdivideError(_format_non_quad_error(bad, unfixable_tris=True), bad)
-
+        if len(comp) < 2:
+            continue
+        if len(comp) % 2 == 0:
+            matched = _match_triangle_component(comp, adj, edge_length)
+            if matched is not None:
+                diagonals.extend(matched)
+                continue
+        diagonals.extend(_match_odd_or_partial(comp, adj, edge_length))
     return diagonals
+
+
+def _opposite_in_quad(quad, edge):
+    vset = set(edge.verts)
+    for oe in quad.edges:
+        if oe is not edge and not (vset & set(oe.verts)):
+            return oe
+    return None
+
+
+def find_slanted_chains(
+    faces,
+    protected_edges=(),
+    *,
+    edge_length,
+    vert_dist,
+    has_edge,
+    max_k: int = 12,
+) -> list[tuple[list, list[tuple]]]:
+    """Find vertex-disjoint slanted parallelogram chains `t1 - q_1 - ... - q_k - t2` to re-quad.
+
+    Each returned item is `(edges_to_dissolve, new_vert_pairs_to_connect)`. Dissolving the slanted
+    diagonals and reconnecting the missing grid edges turns the two end triangles and k slanted
+    quads into k+1 regular quads without crossing `protected_edges`.
+    """
+    face_set = set(faces)
+    tris = [f for f in face_set if len(f.verts) == 3]
+    if len(tris) < 2:
+        return []
+    tri_set = set(tris)
+    protected_set = set(protected_edges)
+    candidates = []
+
+    for t1 in tris:
+        for e0 in t1.edges:
+            if e0 in protected_set or len(e0.link_faces) != 2:
+                continue
+            q = e0.link_faces[1] if e0.link_faces[0] is t1 else e0.link_faces[0]
+            if q not in face_set or len(q.verts) != 4:
+                continue
+
+            chain_edges = [e0]
+            chain_quads = []
+            seen_faces = {t1}
+            cur_f, cur_e = q, e0
+            for _ in range(max_k):
+                if cur_f in seen_faces or cur_f not in face_set or len(cur_f.verts) != 4:
+                    break
+                seen_faces.add(cur_f)
+                chain_quads.append(cur_f)
+                oe = _opposite_in_quad(cur_f, cur_e)
+                if oe is None or oe in protected_set or len(oe.link_faces) != 2:
+                    break
+                chain_edges.append(oe)
+                nxt_f = oe.link_faces[1] if oe.link_faces[0] is cur_f else oe.link_faces[0]
+                if nxt_f in tri_set and nxt_f not in seen_faces:
+                    if id(t1) < id(nxt_f):
+                        a0, b0 = chain_edges[0].verts
+                        rail_a, rail_b = [a0], [b0]
+                        ok = True
+                        for qi, qf in enumerate(chain_quads):
+                            ea, eb = chain_edges[qi], chain_edges[qi + 1]
+                            sides = [se for se in qf.edges if se is not ea and se is not eb]
+                            if len(sides) != 2:
+                                ok = False
+                                break
+                            if rail_a[-1] in sides[0].verts:
+                                sa, sb = sides[0], sides[1]
+                            elif rail_a[-1] in sides[1].verts:
+                                sa, sb = sides[1], sides[0]
+                            else:
+                                ok = False
+                                break
+                            rail_a.append(sa.other_vert(rail_a[-1]))
+                            rail_b.append(sb.other_vert(rail_b[-1]))
+                        if ok and len(set(rail_a) | set(rail_b)) == 2 * len(chain_edges):
+                            k = len(chain_quads)
+                            dissolve_len = sum(edge_length(e) for e in chain_edges)
+                            avg_old = dissolve_len / (k + 1)
+                            for opt in (0, 1):
+                                if opt == 0:
+                                    d1, d2 = rail_b[0], rail_a[-1]
+                                    new_pairs = [(rail_a[i], rail_b[i + 1]) for i in range(k)]
+                                else:
+                                    d1, d2 = rail_a[0], rail_b[-1]
+                                    new_pairs = [(rail_b[i], rail_a[i + 1]) for i in range(k)]
+                                o1 = len(d1.link_edges) - _ideal_val(d1)
+                                o2 = len(d2.link_edges) - _ideal_val(d2)
+                                if o1 < 0 or o2 < 0 or (o1 + o2) <= 0:
+                                    continue
+                                if any(has_edge(u, v) for u, v in new_pairs):
+                                    continue
+                                avg_new = sum(vert_dist(u, v) for u, v in new_pairs) / k
+                                if avg_old <= 1e-12 or avg_new >= avg_old * 0.95:
+                                    continue
+                                score = (k, -(o1 + o2), avg_new / avg_old)
+                                candidates.append((score, t1, nxt_f, chain_quads, chain_edges, new_pairs))
+                    break
+                cur_f, cur_e = nxt_f, oe
+
+    candidates.sort(key=lambda c: c[0])
+    used_faces: set = set()
+    used_verts: set = set()
+    result: list[tuple[list, list[tuple]]] = []
+    for _, t1, t2, quads, edges, new_pairs in candidates:
+        all_f = [t1, t2] + quads
+        if any(f in used_faces for f in all_f):
+            continue
+        all_v = {v for f in all_f for v in f.verts}
+        if all_v & used_verts:
+            continue
+        used_faces.update(all_f)
+        used_verts.update(all_v)
+        result.append((edges, new_pairs))
+    return result
 
 
 def _classify_and_find_collapse_conflicts(

@@ -103,6 +103,7 @@ class VIEW3D_PT_blender_tools_extended(Panel):
 
         layout.separator()
         layout.label(text="Mesh:")
+        layout.operator("blender_tools.fix_quad_topology", icon="MESH_GRID")
         layout.operator("blender_tools.unsubdivide_safe", icon="MOD_DECIM")
         layout.operator("blender_tools.adaptive_quad_remesh", icon="MOD_REMESH")
         unsub_help = layout.column()
