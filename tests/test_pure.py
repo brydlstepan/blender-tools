@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import sys
+import types
 import unittest
 from pathlib import Path
 
@@ -10,6 +11,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load(name, relative):
+    if "." in name:
+        pkg_name = name.rsplit(".", 1)[0]
+        if pkg_name not in sys.modules:
+            pkg = types.ModuleType(pkg_name)
+            pkg.__path__ = [str(ROOT / pkg_name.replace(".", "/"))]
+            sys.modules[pkg_name] = pkg
     spec = importlib.util.spec_from_file_location(name, ROOT / relative)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module  # dataclasses look the module up by name
@@ -331,8 +338,8 @@ class UnsubdivideTests(unittest.TestCase):
         self.assertEqual(ctx.exception.problem_faces, [tri])
         self.assertIn("triangle", str(ctx.exception))
 
-    def test_odd_strip_between_uv_border_and_boundary_selects_only_odd_side(self):
-        # 9x4 grid with UV border at col 3 -> left side is 3x4 (odd!), right side is 6x4 (even!).
+    def test_odd_strip_between_uv_border_and_boundary_keeps_extra_quad_strip(self):
+        # 9x4 grid with UV border at col 3 -> left 3x4 (odd) -> 2x2, right 6x4 (even) -> 3x2, seam intact!
         def _uv(r, c):
             shift = 10.0 if c >= 3 else 0.0
             return [
@@ -342,16 +349,18 @@ class UnsubdivideTests(unittest.TestCase):
                 (c + shift, r + 1),
             ]
 
-        _, _, _, faces_2d = _quad_grid(9, 4, uv_fn=_uv)
+        _, vcols, _, faces_2d = _quad_grid(9, 4, uv_fn=_uv)
         all_faces = [f for row in faces_2d for f in row]
         borders = self.unsub.uv_border_edges(all_faces, lambda loop: loop.uv)
-        with self.assertRaises(self.unsub.UnsubdivideError) as ctx:
-            self.unsub.plan_unsubdivide(all_faces, borders)
-        expected_odd = {faces_2d[r][c] for r in range(4) for c in range(3)}
-        self.assertEqual(set(ctx.exception.problem_faces), expected_odd)
+        plan = self.unsub.plan_unsubdivide(all_faces, borders)
+        dissolved = set(plan.dissolve_edges)
+        self.assertTrue(borders.isdisjoint(dissolved))
+        # Left 3 cols dissolve 1 vertical loop; right 6 cols dissolve 3 vertical loops; 4 rows dissolve 2 horiz loops.
+        # Resulting quad count = (2 + 3) * 2 = 10 -> 4*2 = 8 2x2 centers + 2 1x2 strips.
+        self.assertEqual(len(plan.face_centers), 8)
 
     def test_subdivided_triangle_errors_and_selects_the_three_quads(self):
-        # 1 triangle subdivided once -> 3 quads around a valence-3 interior vertex.
+        # 1 triangle subdivided once -> 3 quads around a valence-3 interior vertex (no dissolvable loops).
         center = _V()
         corners = [_V() for _ in range(3)]
         mids = [_V() for _ in range(3)]
@@ -369,35 +378,167 @@ class UnsubdivideTests(unittest.TestCase):
             self.unsub.plan_unsubdivide(quads)
         self.assertEqual(set(ctx.exception.problem_faces), set(quads))
 
-    def test_odd_closed_cylinder_errors_and_selects_conflict(self):
+    def test_odd_closed_cylinder_unsubdivides_cleanly_to_quads(self):
         _, _, _, faces_2d = _quad_grid(7, 4, wrap_u=True, wrap_v=False)
         all_faces = [f for row in faces_2d for f in row]
-        with self.assertRaises(self.unsub.UnsubdivideError) as ctx:
-            self.unsub.plan_unsubdivide(all_faces)
-        self.assertTrue(len(ctx.exception.problem_faces) >= 7)
+        plan = self.unsub.plan_unsubdivide(all_faces)
+        # 7 around -> dissolves 3 vertical loops (leaves 4 segments); 4 tall -> dissolves 2 horiz loops (leaves 2 rings).
+        self.assertEqual(len(plan.face_centers), 6)
 
-    def test_four_segment_closed_tube_rejects_duplicate_edge_collapse(self):
-        _, _, _, faces_2d = _quad_grid(4, 2, wrap_u=True, wrap_v=False)
+    def test_three_segment_closed_tube_rejects_duplicate_edge_collapse(self):
+        # 3 segments around a closed tube cannot lose a vertical loop without collapsing to 2 duplicate edges.
+        _, _, _, faces_2d = _quad_grid(3, 1, wrap_u=True, wrap_v=False)
         all_faces = [f for row in faces_2d for f in row]
         with self.assertRaises(self.unsub.UnsubdivideError) as ctx:
             self.unsub.plan_unsubdivide(all_faces)
-        self.assertTrue(ctx.exception.problem_faces)
+        self.assertEqual(set(ctx.exception.problem_faces), set(all_faces))
 
-    def test_partial_selection_touching_unselected_faces_errors(self):
-        _, _, _, faces_2d = _quad_grid(6, 4)
+    def test_four_segment_closed_tube_drops_one_loop_to_stay_three_sided(self):
+        # 4 segments around a closed tube drops 1 vertical loop -> 3 segments (no duplicate edges).
+        _, _, _, faces_2d = _quad_grid(4, 2, wrap_u=True, wrap_v=False)
+        all_faces = [f for row in faces_2d for f in row]
+        plan = self.unsub.plan_unsubdivide(all_faces)
+        self.assertEqual(len(plan.face_centers), 1)
+
+    def test_partial_selection_surrounded_by_unselected_faces_errors(self):
+        # 2x2 patch strictly inside a 6x6 grid: every loop hits unselected faces -> 0 dissolvable loops.
+        _, _, _, faces_2d = _quad_grid(6, 6)
+        inner = [faces_2d[r][c] for r in range(2, 4) for c in range(2, 4)]
+        with self.assertRaises(self.unsub.UnsubdivideError) as ctx:
+            self.unsub.plan_unsubdivide(inner)
+        self.assertEqual(set(ctx.exception.problem_faces), set(inner))
+
+    def test_partial_selection_one_axis_only_dissolves_safe_loops(self):
+        # Left 4x4 of a 6x4 grid: horizontal loops touch unselected col 4 (kept), vertical cols 1 & 3 dissolve safely.
+        _, vcols, _, faces_2d = _quad_grid(6, 4)
         left_half = [faces_2d[r][c] for r in range(4) for c in range(4)]
-        with self.assertRaises(self.unsub.UnsubdivideError) as ctx:
-            self.unsub.plan_unsubdivide(left_half)
-        self.assertTrue(ctx.exception.problem_faces)
+        plan = self.unsub.plan_unsubdivide(left_half)
+        self.assertEqual(set(plan.dissolve_edges), vcols[1] | vcols[3])
+        self.assertTrue(vcols[4].isdisjoint(plan.dissolve_edges))
 
-    def test_disconnected_valid_and_invalid_islands_aborts_and_selects_only_invalid(self):
+    def test_disconnected_valid_and_unreducible_islands_still_unsubdivide_valid_island(self):
+        # 4x4 grid + 1x1 single quad (both valid quads, 0 tris) -> 4x4 unsubdivides, 1x1 stays intact.
         _, _, _, good_2d = _quad_grid(4, 4)
-        _, _, _, bad_2d = _quad_grid(3, 4)
+        _, _, _, tiny_2d = _quad_grid(1, 1)
         good = [f for row in good_2d for f in row]
-        bad = [f for row in bad_2d for f in row]
+        tiny = [f for row in tiny_2d for f in row]
+        plan = self.unsub.plan_unsubdivide(good + tiny)
+        self.assertEqual(len(plan.face_centers), 4)
+        self.assertTrue(set(tiny[0].edges).isdisjoint(plan.dissolve_edges))
+
+    def _split_quad_in_grid(self, faces_2d, r, c):
+        """Replace quad faces_2d[r][c] with two triangles sharing its diagonal; return (diag, t1, t2)."""
+        q = faces_2d[r][c]
+        v0, v1, v2, v3 = q.verts
+        edge_map = {frozenset(e.verts): e for e in q.edges}
+        for e in q.edges:
+            e.link_faces.remove(q)
+        for v in q.verts:
+            v.link_faces.remove(q)
+        diag = _E(v0, v2)
+        t1 = _F([edge_map[frozenset((v0, v1))], edge_map[frozenset((v1, v2))], diag], verts=[v0, v1, v2])
+        t2 = _F([diag, edge_map[frozenset((v2, v3))], edge_map[frozenset((v3, v0))]], verts=[v0, v2, v3])
+        return diag, t1, t2
+
+    def test_find_triangle_diagonals_fixes_isolated_and_adjacent_split_quads(self):
+        _, _, _, faces_2d = _quad_grid(4, 4)
+        # Split an isolated quad (0,0) and an adjacent pair (2,1) & (2,2) (a 4-triangle component).
+        splits = [(0, 0), (2, 1), (2, 2)]
+        expected_diags = set()
+        replaced = set()
+        new_tris = []
+        for r, c in splits:
+            replaced.add(faces_2d[r][c])
+            diag, t1, t2 = self._split_quad_in_grid(faces_2d, r, c)
+            expected_diags.add(diag)
+            new_tris.extend((t1, t2))
+        faces = [f for row in faces_2d for f in row if f not in replaced] + new_tris
+        got = self.unsub.find_triangle_diagonals(faces)
+        self.assertEqual(set(got), expected_diags)
+
+    def test_find_triangle_diagonals_respects_uv_borders_and_rejects_unfixable(self):
+        _, _, _, faces_2d = _quad_grid(4, 4)
+        diag, t1, t2 = self._split_quad_in_grid(faces_2d, 1, 1)
+        faces = [f for row in faces_2d for f in row if f is not faces_2d[1][1]] + [t1, t2]
+        # Protecting the diagonal as a UV border makes the pair unfixable.
         with self.assertRaises(self.unsub.UnsubdivideError) as ctx:
-            self.unsub.plan_unsubdivide(good + bad)
-        self.assertEqual(set(ctx.exception.problem_faces), set(bad))
+            self.unsub.find_triangle_diagonals(faces, protected_edges={diag})
+        self.assertEqual(set(ctx.exception.problem_faces), {t1, t2})
+
+    def test_find_triangle_diagonals_rejects_odd_triangle_and_selects_only_unfixable(self):
+        _, _, _, faces_2d = _quad_grid(4, 4)
+        _, t1, t2 = self._split_quad_in_grid(faces_2d, 0, 0)
+        a, b, c = _V(), _V(), _V()
+        lone_tri = _F([_E(a, b), _E(b, c), _E(c, a)], verts=[a, b, c])
+        faces = [f for row in faces_2d for f in row if f is not faces_2d[0][0]] + [t1, t2, lone_tri]
+        with self.assertRaises(self.unsub.UnsubdivideError) as ctx:
+            self.unsub.find_triangle_diagonals(faces)
+        self.assertEqual(ctx.exception.problem_faces, [lone_tri])
+
+
+class AdaptiveRemeshTests(unittest.TestCase):
+    unsub = _load("extended_tools.unsubdivide", "extended_tools/unsubdivide.py")
+    remesh = _load("extended_tools.adaptive_remesh", "extended_tools/adaptive_remesh.py")
+
+    def test_uniform_mode_spaces_by_arc_length(self):
+        # 4 spans of unequal lengths [1, 1, 1, 7] (total 10): keeping 1 interior loop at uniformity=1
+        # should land at arc-length 5.0 -> inside span 3 (t = 3 + 2/7).
+        targets = self.remesh.compute_target_params(
+            span_lengths=[1.0, 1.0, 1.0, 7.0],
+            loop_curvatures=[1.0, 0.0, 0.0],
+            keep_count=1,
+            uniformity=1.0,
+        )
+        self.assertEqual(len(targets), 1)
+        self.assertAlmostEqual(targets[0], 3.0 + 2.0 / 7.0, places=5)
+
+    def test_detail_mode_pulls_loops_toward_curved_region(self):
+        # 10 equal-length spans; high curvature only on the right half (loops 6..8).
+        lengths = [1.0] * 10
+        curvs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 1.0, 0.8, 0.0]
+        uniform_t = self.remesh.compute_target_params(lengths, curvs, keep_count=4, uniformity=1.0)
+        detail_t = self.remesh.compute_target_params(lengths, curvs, keep_count=4, uniformity=0.0)
+        blended_t = self.remesh.compute_target_params(lengths, curvs, keep_count=4, uniformity=0.5)
+        # Detail mode puts strictly more loops on the curved right half (t > 5) than uniform mode.
+        self.assertGreater(sum(1 for t in detail_t if t > 5.0), sum(1 for t in uniform_t if t > 5.0))
+        # Blended sits smoothly between uniform and detail.
+        self.assertLess(uniform_t[0], blended_t[0])
+        self.assertLess(blended_t[0], detail_t[0])
+
+    def test_extract_and_plan_strip_preserves_uv_borders(self):
+        # 8x4 grid with a UV border at col 4 -> two horizontal-axis strips (cols 1..3 and cols 5..7)
+        # plus one vertical-axis strip (rows 1..3).
+        def _uv(r, c):
+            shift = 10.0 if c >= 4 else 0.0
+            return [(c + shift, r), (c + 1 + shift, r), (c + 1 + shift, r + 1), (c + shift, r + 1)]
+
+        verts, vcols, _, faces_2d = _quad_grid(8, 4, uv_fn=_uv)
+        coords = {verts[r][c]: (float(c), float(r), 0.0) for r in range(5) for c in range(9)}
+        all_faces = [f for row in faces_2d for f in row]
+        borders = self.unsub.uv_border_edges(all_faces, lambda loop: loop.uv)
+        strips = self.remesh.extract_strips(all_faces, protected_edges=borders)
+        self.assertEqual(len(strips), 3)
+        for strip in strips:
+            plan = self.remesh.plan_strip_remesh(strip, reduction=0.5, uniformity=0.0, get_co=coords.__getitem__)
+            self.assertIsNotNone(plan)
+            self.assertTrue(borders.isdisjoint(plan.dissolve_edges))
+
+    def test_closed_ring_pins_sharpest_crease_loop(self):
+        # 8-segment closed cylinder where column 3 has a sharp Z ridge.
+        verts, vcols, _, faces_2d = _quad_grid(8, 2, wrap_u=True, wrap_v=False)
+        import math
+        coords = {}
+        for r in range(3):
+            for c in range(8):
+                ang = 2.0 * math.pi * c / 8.0
+                rad = 2.0 if c == 3 else 1.0
+                coords[verts[r][c]] = (rad * math.cos(ang), rad * math.sin(ang), float(r))
+        all_faces = [f for row in faces_2d for f in row]
+        strips = self.remesh.extract_strips(all_faces)
+        closed_strips = [s for s in strips if s.closed]
+        self.assertEqual(len(closed_strips), 1)
+        anchor = self.remesh.pick_closed_ring_anchor(closed_strips[0], coords.__getitem__)
+        self.assertEqual(set(anchor), vcols[3])
 
 
 class MessageTests(unittest.TestCase):

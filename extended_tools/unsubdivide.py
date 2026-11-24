@@ -1,18 +1,19 @@
 """UV-safe quad un-subdivision. Pure logic on bmesh-like objects (no bpy), so tests run without Blender.
 
-Reverses one level of quad subdivision (2x2 quads -> 1 quad) by 2-coloring edges into KEPT (0) and
-DISSOLVE (1). Boundaries, poles, and actual UV island borders are pinned to KEPT so seams survive
-and the result is guaranteed all-quad; any conflict raises UnsubdivideError with the offending faces.
+Reverses one level of quad subdivision by selecting a maximum non-adjacent set of dissolvable edge
+loops. Boundaries, poles, selection borders, and actual UV island borders stay KEPT so seams survive
+and the result is guaranteed all-quad (even on odd spans like 143x206, where one quad strip stays
+un-merged instead of failing or creating triangles).
 """
 
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 
-KEPT = 0
-DISSOLVE = 1
 UV_EPS = 1e-5
+_MAX_EXACT_CORE = 24
+_MAX_EXACT_MATCHINGS = 256
 
 
 class UnsubdivideError(ValueError):
@@ -25,8 +26,9 @@ class UnsubdivideError(ValueError):
 
 @dataclass
 class UnsubdividePlan:
-    """Vertices to dissolve in two passes: face centers first, then collinear edge midpoints."""
+    """Topology elements to dissolve: face centers (val-4), remaining strip edges, then midpoints."""
 
+    dissolve_edges: list
     face_centers: list
     edge_midpoints: list
 
@@ -110,67 +112,287 @@ def _regular_interior_pairs(vert, face_set: set) -> tuple[tuple, tuple] | None:
     return ((e0, e2), (rest[0], rest[1]))
 
 
-def _is_regular_boundary_val3(vert, face_set: set) -> bool:
-    """True when `vert` is a clean valence-3 boundary vertex (2 boundary edges, 1 interior edge)."""
+def _regular_boundary_val3_interior_edge(vert, face_set: set):
+    """If `vert` is a clean valence-3 boundary vertex inside `face_set`, return its 1 interior edge."""
     edges = vert.link_edges
     if len(edges) != 3:
-        return False
+        return None
     boundary = 0
-    interior = 0
+    interior_edge = None
     faces = set()
     for e in edges:
         lf = set(e.link_faces)
         if not lf or not lf.issubset(face_set):
-            return False
+            return None
         if len(lf) == 1:
             boundary += 1
         elif len(lf) == 2:
-            interior += 1
+            interior_edge = e
         else:
-            return False
+            return None
         faces |= lf
-    return boundary == 2 and interior == 1 and len(faces) == 2
+    if boundary == 2 and interior_edge is not None and len(faces) == 2:
+        return interior_edge
+    return None
 
 
-def _chain(edge, parent: dict) -> list:
-    path = []
-    while edge is not None:
-        path.append(edge)
-        edge = parent[edge]
-    return path
-
-
-def _conflict_faces_between(a, b, via_face_ab, parent: dict, via_face: dict) -> set:
-    """Faces along the shortest conflicting path (between two pins) or odd cycle (up to LCA)."""
-    faces = set()
-    if via_face_ab is not None:
-        faces.add(via_face_ab)
-    chain_a = _chain(a, parent)
-    chain_b = _chain(b, parent)
-    ancestors_a = set(chain_a)
-    lca = next((e for e in chain_b if e in ancestors_a), None)
-    for e in chain_a:
-        if e is lca:
-            break
-        if via_face[e] is not None:
-            faces.add(via_face[e])
-    for e in chain_b:
-        if e is lca:
-            break
-        if via_face[e] is not None:
-            faces.add(via_face[e])
-    return faces
-
-
-def _format_non_quad_error(non_quads: list) -> str:
+def _format_non_quad_error(non_quads: list, *, unfixable_tris: bool = False) -> str:
     tris = sum(1 for f in non_quads if len(f.verts) == 3)
     ngons = len(non_quads) - tris
     parts = []
     if tris:
-        parts.append(f"{tris} triangle(s)")
+        label = "unfixable triangle(s)" if unfixable_tris else "triangle(s)"
+        parts.append(f"{tris} {label}")
     if ngons:
         parts.append(f"{ngons} n-gon(s)")
     return f"Cannot un-subdivide: found {', '.join(parts)}"
+
+
+def _is_boundary_vert(vert) -> bool:
+    return any(len(e.link_faces) == 1 for e in vert.link_edges)
+
+
+def _match_triangle_component(comp: list, adj: dict, edge_length) -> list | None:
+    """Pair every triangle in `comp` across shared edges, or return None if impossible."""
+    if len(comp) % 2 == 1:
+        return None
+
+    chosen: list = []
+    remaining: set = set(comp)
+
+    def _reduce_leaves() -> bool:
+        queue = deque(
+            f for f in remaining if sum(1 for nb, _ in adj[f] if nb in remaining) <= 1
+        )
+        while queue:
+            f = queue.popleft()
+            if f not in remaining:
+                continue
+            nbs = [(nb, e) for nb, e in adj[f] if nb in remaining]
+            if not nbs:
+                return False
+            nb, edge = nbs[0]
+            remaining.remove(f)
+            remaining.remove(nb)
+            chosen.append(edge)
+            for touched in (f, nb):
+                for other, _ in adj[touched]:
+                    if other in remaining:
+                        deg = sum(1 for x, _ in adj[other] if x in remaining)
+                        if deg <= 1:
+                            queue.append(other)
+        return True
+
+    if not _reduce_leaves():
+        return None
+    if not remaining:
+        return chosen
+
+    # Core where every remaining triangle has degree >= 2.
+    core = list(remaining)
+    if len(core) <= _MAX_EXACT_CORE:
+        matchings: list[list] = []
+        used: set = set()
+
+        def _search(picked: list) -> None:
+            if len(matchings) >= _MAX_EXACT_MATCHINGS:
+                return
+            rem = [f for f in core if f not in used]
+            if not rem:
+                matchings.append(list(picked))
+                return
+            f0 = min(rem, key=lambda f: sum(1 for nb, _ in adj[f] if nb not in used))
+            used.add(f0)
+            for nb, edge in adj[f0]:
+                if nb in remaining and nb not in used:
+                    used.add(nb)
+                    picked.append(edge)
+                    _search(picked)
+                    picked.pop()
+                    used.remove(nb)
+            used.remove(f0)
+
+        _search([])
+        if not matchings:
+            return None
+        verts = {v for f in core for v in f.verts}
+        base_dec = Counter()
+        for e in chosen:
+            base_dec[e.verts[0]] += 1
+            base_dec[e.verts[1]] += 1
+
+        def _score(matching: list) -> tuple:
+            dec = base_dec.copy()
+            for e in matching:
+                dec[e.verts[0]] += 1
+                dec[e.verts[1]] += 1
+            val_err = sum(
+                abs((len(v.link_edges) - dec[v]) - (3 if _is_boundary_vert(v) else 4))
+                for v in verts
+            )
+            neg_len = -sum(edge_length(e) for e in matching) if edge_length is not None else 0.0
+            return (val_err, neg_len)
+
+        best = min(matchings, key=_score)
+        return chosen + best
+
+    # Large core fallback: greedily pick the strongest diagonal (highest valence reduction, then
+    # longest edge) and cascade forced leaves after each pick.
+    dec = Counter()
+    for e in chosen:
+        dec[e.verts[0]] += 1
+        dec[e.verts[1]] += 1
+
+    while remaining:
+        best_pair = None
+        best_key = None
+        for f in remaining:
+            for nb, edge in adj[f]:
+                if nb not in remaining:
+                    continue
+                v0, v1 = edge.verts
+                over0 = (len(v0.link_edges) - dec[v0]) - (3 if _is_boundary_vert(v0) else 4)
+                over1 = (len(v1.link_edges) - dec[v1]) - (3 if _is_boundary_vert(v1) else 4)
+                key = (over0 + over1, edge_length(edge) if edge_length is not None else 0.0)
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best_pair = (f, nb, edge)
+        if best_pair is None:
+            return None
+        f, nb, edge = best_pair
+        remaining.remove(f)
+        remaining.remove(nb)
+        chosen.append(edge)
+        dec[edge.verts[0]] += 1
+        dec[edge.verts[1]] += 1
+        prev_len = len(chosen)
+        if not _reduce_leaves():
+            return None
+        for added in chosen[prev_len:]:
+            dec[added.verts[0]] += 1
+            dec[added.verts[1]] += 1
+
+    return chosen
+
+
+def find_triangle_diagonals(faces, protected_edges=(), edge_length=None) -> list:
+    """Find interior diagonal edges whose dissolution merges every triangle pair into a quad.
+
+    Never crosses `protected_edges` (e.g. UV island borders). Raises UnsubdivideError with only the
+    n-gons and unfixable triangles if any non-quad cannot be cleanly paired.
+    """
+    target = list(faces)
+    ngons = [f for f in target if len(f.verts) > 4]
+    tris = [f for f in target if len(f.verts) == 3]
+    if not tris and not ngons:
+        return []
+
+    protected_set = set(protected_edges)
+    tri_set = set(tris)
+    adj: dict = {f: [] for f in tris}
+    for e in {e for f in tris for e in f.edges}:
+        if e in protected_set:
+            continue
+        lf = e.link_faces
+        if len(lf) != 2 or lf[0] not in tri_set or lf[1] not in tri_set:
+            continue
+        f1, f2 = lf[0], lf[1]
+        if len(set(f1.edges) & set(f2.edges)) != 1:
+            continue
+        adj[f1].append((f2, e))
+        adj[f2].append((f1, e))
+
+    visited: set = set()
+    diagonals: list = []
+    unfixable: list = []
+    for f in tris:
+        if f in visited:
+            continue
+        comp = []
+        queue = deque([f])
+        visited.add(f)
+        while queue:
+            cur = queue.popleft()
+            comp.append(cur)
+            for nb, _ in adj[cur]:
+                if nb not in visited:
+                    visited.add(nb)
+                    queue.append(nb)
+        matched = _match_triangle_component(comp, adj, edge_length)
+        if matched is None:
+            unfixable.extend(comp)
+        else:
+            diagonals.extend(matched)
+
+    if ngons or unfixable:
+        bad = ngons + unfixable
+        raise UnsubdivideError(_format_non_quad_error(bad, unfixable_tris=True), bad)
+
+    return diagonals
+
+
+def _classify_and_find_collapse_conflicts(
+    verts_in_target: set,
+    edges_in_target: set,
+    face_set: set,
+    dissolve_edges: set,
+) -> tuple[list, list, list]:
+    """Classify vertices into face_centers / edge_midpoints and return any conflicting dissolved edges."""
+    face_centers = []
+    edge_midpoints = []
+    v_orig: set = set()
+    conflict_edges = []
+
+    for v in verts_in_target:
+        inc = [e for e in v.link_edges if e in edges_in_target]
+        kept = [e for e in inc if e not in dissolve_edges]
+        dissolved = [e for e in inc if e in dissolve_edges]
+
+        if not dissolved:
+            v_orig.add(v)
+        elif not kept:
+            v_faces = [f for f in v.link_faces if f in face_set]
+            if len(inc) != 4 or len(v_faces) != 4:
+                conflict_edges.append(dissolved[0])
+                continue
+            corners = {
+                fv
+                for f in v_faces
+                for fv in f.verts
+                if fv is not v and not any(fv in e.verts for e in inc)
+            }
+            if len(corners) != 4:
+                conflict_edges.append(dissolved[0])
+                continue
+            face_centers.append(v)
+        else:
+            if len(kept) != 2:
+                conflict_edges.append(dissolved[0])
+                continue
+            edge_midpoints.append((v, kept, dissolved))
+
+    # Every coarse edge is either an existing KEPT edge between two V_orig verts,
+    # or two collinear KEPT edges merged across an edge_midpoint. No self-loops or duplicates allowed.
+    coarse_edges: set = set()
+    for e in edges_in_target:
+        if e not in dissolve_edges and e.verts[0] in v_orig and e.verts[1] in v_orig:
+            coarse_edges.add(frozenset(e.verts))
+
+    valid_midpoints = []
+    for v, kept, dissolved in edge_midpoints:
+        u1 = kept[0].other_vert(v)
+        u2 = kept[1].other_vert(v)
+        if u1 is u2:
+            conflict_edges.append(dissolved[0])
+            continue
+        key = frozenset((u1, u2))
+        if key in coarse_edges:
+            conflict_edges.append(dissolved[0])
+            continue
+        coarse_edges.add(key)
+        valid_midpoints.append(v)
+
+    return face_centers, valid_midpoints, conflict_edges
 
 
 def plan_unsubdivide(faces, protected_edges=()) -> UnsubdividePlan:
@@ -190,147 +412,129 @@ def plan_unsubdivide(faces, protected_edges=()) -> UnsubdividePlan:
         edges_in_target.update(f.edges)
         verts_in_target.update(f.verts)
 
-    # Protected edges must stay KEPT: open/selection boundaries, non-manifold edges, UV borders.
-    pinned: set = set()
-    protected_set = set(protected_edges)
-    for e in edges_in_target:
-        lf = e.link_faces
-        if e in protected_set or len(lf) != 2 or not all(f in face_set for f in lf):
-            pinned.add(e)
-
-    # Build constraint graph on edges: (neighbor, same_color, face_crossed_or_None).
-    adj: dict = {e: [] for e in edges_in_target}
+    # Validate quads and record opposite edge pairs.
+    quad_pairs: dict = {}
     degenerate_faces = []
     for f in target:
         pairs = _quad_opposite_pairs(f)
         if pairs is None:
             degenerate_faces.append(f)
-            continue
-        for e1, e2 in pairs:
-            adj[e1].append((e2, False, f))
-            adj[e2].append((e1, False, f))
+        else:
+            quad_pairs[f] = pairs
     if degenerate_faces:
         raise UnsubdivideError(
             f"Cannot un-subdivide: {len(degenerate_faces)} degenerate face(s)",
             degenerate_faces,
         )
 
-    # Vertices that cannot be V_face (val 4 interior) or V_edge (val 4 interior / val 3 boundary)
-    # must stay V_orig, so every incident edge in target is pinned to KEPT.
+    # Identify straight-through links at regular interior 4-valent vertices, and pinned edges.
+    protected_set = set(protected_edges)
+    pinned_edges: set = set()
+    for e in edges_in_target:
+        lf = e.link_faces
+        if e in protected_set or len(lf) != 2 or not all(f in face_set for f in lf):
+            pinned_edges.add(e)
+
+    straight_adj: dict = {e: [] for e in edges_in_target}
     for v in verts_in_target:
         pairs = _regular_interior_pairs(v, face_set)
         if pairs is not None:
             for e1, e2 in pairs:
-                adj[e1].append((e2, True, None))
-                adj[e2].append((e1, True, None))
-        elif not _is_regular_boundary_val3(v, face_set):
+                straight_adj[e1].append(e2)
+                straight_adj[e2].append(e1)
+        else:
+            # At a regular boundary val-3 vertex, only its 1 interior edge may be dissolved.
+            # Every other non-regular vertex (poles, corners, selection borders) pins all its edges.
+            allowed_interior = _regular_boundary_val3_interior_edge(v, face_set)
             for e in v.link_edges:
-                if e in edges_in_target:
-                    pinned.add(e)
+                if e in edges_in_target and e is not allowed_interior:
+                    pinned_edges.add(e)
 
-    # 2-color the constraint graph: multi-source BFS from all pinned KEPT edges first,
-    # then seed-based BFS for any completely unpinned component (e.g. a seamless torus).
-    color: dict = {}
-    parent: dict = {}
-    via_face: dict = {}
-    conflict_faces: set = set()
-
-    def _run_bfs(seeds) -> None:
-        queue = deque()
-        for e in seeds:
-            if e in color:
-                continue
-            color[e] = KEPT
-            parent[e] = None
-            via_face[e] = None
-            queue.append(e)
+    # Partition edges into maximal straight edge loops.
+    edge_to_loop: dict = {}
+    loops: list[list] = []
+    for e in edges_in_target:
+        if e in edge_to_loop:
+            continue
+        lid = len(loops)
+        comp = []
+        queue = deque([e])
+        edge_to_loop[e] = lid
         while queue:
             cur = queue.popleft()
-            c_cur = color[cur]
-            for nxt, same, face in adj[cur]:
-                expected = c_cur if same else 1 - c_cur
-                if nxt not in color:
-                    color[nxt] = expected
-                    parent[nxt] = cur
-                    via_face[nxt] = face
+            comp.append(cur)
+            for nxt in straight_adj[cur]:
+                if nxt not in edge_to_loop:
+                    edge_to_loop[nxt] = lid
                     queue.append(nxt)
-                elif color[nxt] != expected:
-                    found = _conflict_faces_between(cur, nxt, face, parent, via_face)
-                    if not found:
-                        found = {f for f in cur.link_faces if f in face_set}
-                    conflict_faces.update(found)
+        loops.append(comp)
 
-    if pinned:
-        _run_bfs(pinned)
-    for e in edges_in_target:
-        if e not in color:
-            _run_bfs([e])
+    # A loop is fixed KEPT if any edge in it is pinned or if it faces itself across a quad.
+    fixed_kept: set[int] = {edge_to_loop[e] for e in pinned_edges}
+    loop_adj: list[set[int]] = [set() for _ in range(len(loops))]
+    for pairs in quad_pairs.values():
+        for e1, e2 in pairs:
+            l1 = edge_to_loop[e1]
+            l2 = edge_to_loop[e2]
+            if l1 == l2:
+                fixed_kept.add(l1)
+            else:
+                loop_adj[l1].add(l2)
+                loop_adj[l2].add(l1)
 
-    if conflict_faces:
+    # Pick a maximal independent set of dissolvable loops via BFS from fixed KEPT anchors
+    # (anchors = distance 0 KEPT -> distance 1 DISSOLVE -> distance 2 KEPT -> ...).
+    # On even spans this is exact 2:1; on odd spans one single quad strip stays KEPT in the middle.
+    visited: set[int] = set()
+    dissolved_loops: set[int] = set()
+
+    def _bfs_select(seeds) -> None:
+        queue = deque()
+        for lid in seeds:
+            if lid in visited:
+                continue
+            visited.add(lid)
+            queue.append(lid)
+        while queue:
+            cur = queue.popleft()
+            if cur not in fixed_kept and not (loop_adj[cur] & dissolved_loops):
+                dissolved_loops.add(cur)
+            for nxt in loop_adj[cur]:
+                if nxt not in visited:
+                    visited.add(nxt)
+                    queue.append(nxt)
+
+    if fixed_kept:
+        _bfs_select(fixed_kept)
+    for lid in range(len(loops)):
+        if lid not in visited:
+            # Unpinned closed component (e.g. seamless torus): keep seed loop so its neighbors dissolve.
+            visited.add(lid)
+            _bfs_select(loop_adj[lid])
+
+    # Verify no dissolved loop would collapse a thin ring into duplicate edges; drop one at a time.
+    while True:
+        dissolve_edges = {e for lid in dissolved_loops for e in loops[lid]}
+        face_centers, edge_midpoints, conflicts = _classify_and_find_collapse_conflicts(
+            verts_in_target, edges_in_target, face_set, dissolve_edges
+        )
+        if not conflicts:
+            break
+        dropped = {edge_to_loop[e] for e in conflicts} & dissolved_loops
+        if not dropped:
+            break
+        dissolved_loops.discard(max(dropped))
+
+    if not dissolved_loops:
+        # Report the faces that couldn't be un-subdivided (e.g. poles, selection borders, or minimal mesh).
         raise UnsubdivideError(
-            f"Cannot un-subdivide cleanly without creating triangles or breaking UV borders "
-            f"({len(conflict_faces)} conflicting face(s) selected)",
-            conflict_faces,
+            f"Cannot un-subdivide further while keeping quads and UV borders "
+            f"({len(target)} face(s) selected)",
+            target,
         )
 
-    # Classify vertices from the valid edge coloring and verify no degenerate merges occur.
-    face_centers = []
-    edge_midpoints = []
-    bad_faces: set = set()
-    merged_edge_pairs: dict = {}
-
-    for v in verts_in_target:
-        inc = [e for e in v.link_edges if e in edges_in_target]
-        kept = [e for e in inc if color[e] == KEPT]
-        dissolved = [e for e in inc if color[e] == DISSOLVE]
-
-        if not dissolved:
-            continue  # V_orig
-
-        if not kept:
-            # V_face: must be interior valence-4 with 4 distinct V_orig corners.
-            v_faces = [f for f in v.link_faces if f in face_set]
-            if len(inc) != 4 or len(v_faces) != 4:
-                bad_faces.update(v_faces)
-                continue
-            corners = set()
-            for f in v_faces:
-                for fv in f.verts:
-                    if fv is not v and not any(
-                        fv in e.verts for e in inc
-                    ):
-                        corners.add(fv)
-            if len(corners) != 4:
-                bad_faces.update(v_faces)
-                continue
-            face_centers.append(v)
-        else:
-            # V_edge: must connect 2 distinct V_orig vertices with no duplicate coarse edge.
-            if len(kept) != 2:
-                bad_faces.update(f for f in v.link_faces if f in face_set)
-                continue
-            u1 = kept[0].other_vert(v)
-            u2 = kept[1].other_vert(v)
-            if u1 is u2:
-                bad_faces.update(f for f in v.link_faces if f in face_set)
-                continue
-            key = frozenset((u1, u2))
-            prev = merged_edge_pairs.get(key)
-            if prev is not None:
-                bad_faces.update(f for f in v.link_faces if f in face_set)
-                bad_faces.update(f for f in prev.link_faces if f in face_set)
-                continue
-            merged_edge_pairs[key] = v
-            edge_midpoints.append(v)
-
-    if bad_faces:
-        raise UnsubdivideError(
-            f"Cannot un-subdivide: topology would collapse or create duplicate edges "
-            f"({len(bad_faces)} face(s) selected)",
-            bad_faces,
-        )
-
-    if not face_centers:
-        raise UnsubdivideError("Nothing to un-subdivide", target)
-
-    return UnsubdividePlan(face_centers=face_centers, edge_midpoints=edge_midpoints)
+    return UnsubdividePlan(
+        dissolve_edges=list(dissolve_edges),
+        face_centers=face_centers,
+        edge_midpoints=edge_midpoints,
+    )

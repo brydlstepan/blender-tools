@@ -104,6 +104,7 @@ class VIEW3D_PT_blender_tools_extended(Panel):
         layout.separator()
         layout.label(text="Mesh:")
         layout.operator("blender_tools.unsubdivide_safe", icon="MOD_DECIM")
+        layout.operator("blender_tools.adaptive_quad_remesh", icon="MOD_REMESH")
         unsub_help = layout.column()
         unsub_help.scale_y = 0.85
         unsub_help.label(text="Edit Mesh: keeps UV island borders", icon="INFO")
