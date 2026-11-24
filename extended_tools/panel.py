@@ -101,6 +101,13 @@ class VIEW3D_PT_blender_tools_extended(Panel):
         loop_help.scale_y = 0.85
         loop_help.label(text="Edit Mesh: select loop 1, skip, loop 2", icon="INFO")
 
+        layout.separator()
+        layout.label(text="Mesh:")
+        layout.operator("blender_tools.unsubdivide_safe", icon="MOD_DECIM")
+        unsub_help = layout.column()
+        unsub_help.scale_y = 0.85
+        unsub_help.label(text="Edit Mesh: keeps UV island borders", icon="INFO")
+
         footer = layout.row()
         footer.alignment = "RIGHT"
         footer.label(text=VERSION)

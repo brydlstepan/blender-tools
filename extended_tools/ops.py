@@ -7,7 +7,7 @@ import bpy
 from bpy.props import IntProperty
 from bpy.types import Context, Operator
 
-from . import clear_parent, loops
+from . import clear_parent, loops, unsubdivide
 from ..version import VERSION
 
 
@@ -88,7 +88,83 @@ class BLENDERTOOLS_OT_select_next_loops(Operator):
         return {"FINISHED"}
 
 
-classes = (BLENDERTOOLS_OT_clear_parent_keep_transform, BLENDERTOOLS_OT_select_next_loops)
+class BLENDERTOOLS_OT_unsubdivide_safe(Operator):
+    """Un-subdivide one level while preserving UV island borders; abort and select problems on conflict"""
+
+    bl_idname = "blender_tools.unsubdivide_safe"
+    bl_label = "UV-Safe Un-Subdivide"
+    bl_description = (
+        "Un-subdivide one level while preserving UV island borders; "
+        "aborts without modifying the mesh and selects problematic faces if quads cannot be preserved"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: Context) -> bool:
+        return context.mode == "EDIT_MESH" and context.edit_object is not None
+
+    def execute(self, context: Context):
+        me = context.edit_object.data
+        bm = bmesh.from_edit_mesh(me)
+
+        visible = [f for f in bm.faces if not f.hide]
+        target = [f for f in visible if f.select] or visible
+        if not target:
+            self.report({"WARNING"}, "No visible faces to un-subdivide")
+            return {"CANCELLED"}
+
+        uv_layer = bm.loops.layers.uv.active
+        uv_borders = (
+            unsubdivide.uv_border_edges(target, lambda loop: loop[uv_layer].uv)
+            if uv_layer is not None
+            else set()
+        )
+
+        try:
+            plan = unsubdivide.plan_unsubdivide(target, uv_borders)
+        except unsubdivide.UnsubdivideError as err:
+            for v in bm.verts:
+                v.select = False
+            for e in bm.edges:
+                e.select = False
+            for f in bm.faces:
+                f.select = False
+            for f in err.problem_faces:
+                f.select = True
+                for e in f.edges:
+                    e.select = True
+                for v in f.verts:
+                    v.select = True
+            bm.select_flush_mode()
+            bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
+            self.report({"ERROR"}, str(err))
+            return {"FINISHED"}
+
+        before_count = len(target)
+        bmesh.ops.dissolve_verts(
+            bm,
+            verts=plan.face_centers,
+            use_face_split=False,
+            use_boundary_tear=False,
+        )
+        mids = [v for v in plan.edge_midpoints if v.is_valid]
+        bmesh.ops.dissolve_verts(
+            bm,
+            verts=mids,
+            use_face_split=False,
+            use_boundary_tear=False,
+        )
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(me, loop_triangles=True, destructive=True)
+        self.report({"INFO"}, f"Un-subdivided {before_count} -> {len(plan.face_centers)} quads")
+        return {"FINISHED"}
+
+
+classes = (
+    BLENDERTOOLS_OT_clear_parent_keep_transform,
+    BLENDERTOOLS_OT_select_next_loops,
+    BLENDERTOOLS_OT_unsubdivide_safe,
+)
 
 
 def register() -> None:

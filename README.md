@@ -81,6 +81,12 @@ Replaces the awkward default **Item → Transform** median-offset behaviour. Lai
 | --- | --- |
 | Select Next Loops | Edit Mesh: select loop 1, skip any number of loops, then select loop 2 (last). Click the button to select every following loop at the same spacing. Redo panel `Count` limits how many (0 = to the end) |
 
+#### Mesh
+
+| Tool | What it does |
+| --- | --- |
+| UV-Safe Un-Subdivide | Edit Mesh: un-subdivides one level on selected faces (or all visible faces if none selected) while keeping actual UV island borders intact. Aborts without modifying the mesh and selects the problematic faces if clean quads cannot be produced (triangles, odd spans, or UV border parity conflicts) |
+
 ### Separate FBX Export
 
 Exports **each object to its own `.fbx`**.
