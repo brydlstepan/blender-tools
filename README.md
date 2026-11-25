@@ -86,6 +86,7 @@ Replaces the awkward default **Item → Transform** median-offset behaviour. Lai
 | Tool | What it does |
 | --- | --- |
 | Fix Quad Topology | Edit Mesh: checks quad topology and auto-fixes diagonally split quad triangles and slanted parallelogram chains (two triangles separated by slanted quads with a missing grid edge) while keeping actual UV island borders intact; selects any remaining unfixable non-quads |
+| Quads from Reference | Edit Mesh (**true all-quad topology only**): select one or more clean reference edge loops or quad loops on a triangulated mesh to propagate exact quad flow across the rest of the mesh. Redo panel (`F9`): `Retriangulate Unselected Quads` (rebuild messy Tris-to-Quads areas from scratch using your reference) and `Respect UV Borders` |
 | UV-Safe Un-Subdivide | Edit Mesh: un-subdivides one level on clean quads (selected faces, or all visible faces if none selected) while keeping actual UV island borders intact (odd quad spans keep one un-merged quad strip). Aborts without modifying the mesh and selects any non-quads or un-reducible faces |
 | Adaptive Quad Reduce | Edit Mesh: reduces and slides quad edge loops smoothly along the surface on clean quads while keeping 100% quads and actual UV island borders. Redo panel (`F9`): `Reduction` (0–95% loops removed; 0% slides only) and `Uniformity` (1 = even arc-length spacing, 0 = dense loops on detailed/curved areas and wider loops on flat areas) |
 

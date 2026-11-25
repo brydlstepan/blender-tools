@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import bmesh
 import bpy
-from bpy.props import FloatProperty, IntProperty
+from bpy.props import BoolProperty, FloatProperty, IntProperty
 from bpy.types import Context, Operator
 
-from . import adaptive_remesh, clear_parent, loops, unsubdivide
+from . import adaptive_remesh, clear_parent, detriangulate, loops, unsubdivide
 from ..version import VERSION
 
 
@@ -430,10 +430,128 @@ class BLENDERTOOLS_OT_adaptive_quad_remesh(Operator):
         return {"FINISHED"}
 
 
+class BLENDERTOOLS_OT_quads_from_reference(Operator):
+    """Rebuild quads across a triangulated all-quad mesh by propagating flow from selected reference loop(s)"""
+
+    bl_idname = "blender_tools.quads_from_reference"
+    bl_label = "Quads from Reference"
+    bl_description = (
+        "Propagate quad flow across a triangulated mesh from selected clean reference edge/face "
+        "loop(s). Only for meshes whose true underlying topology is all-quad"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    retriangulate_unselected: BoolProperty(
+        name="Retriangulate Unselected Quads",
+        description=(
+            "First triangulate unselected quads so messy Tris-to-Quads areas are rebuilt cleanly "
+            "from the selected reference loop(s)"
+        ),
+        default=False,
+    )
+    respect_uv_borders: BoolProperty(
+        name="Respect UV Borders",
+        description="Treat actual UV island borders as grid edges (never dissolve across UV seams)",
+        default=True,
+    )
+
+    @classmethod
+    def poll(cls, context: Context) -> bool:
+        return context.mode == "EDIT_MESH" and context.edit_object is not None
+
+    def execute(self, context: Context):
+        me = context.edit_object.data
+        bm = bmesh.from_edit_mesh(me)
+
+        visible = [f for f in bm.faces if not f.hide]
+        if not visible:
+            self.report({"WARNING"}, "No visible faces")
+            return {"CANCELLED"}
+
+        ref_quads = [f for f in visible if f.select and len(f.verts) == 4]
+        ref_quad_set = set(ref_quads)
+        ref_edges = {e for e in bm.edges if e.select and not e.hide}
+        ref_grid_edges = set(ref_edges) | {e for f in ref_quads for e in f.edges}
+        if not ref_grid_edges:
+            self.report({"WARNING"}, "Select at least one clean reference edge loop or quad loop")
+            return {"CANCELLED"}
+
+        ref_quad_verts = {v for f in ref_quads for v in f.verts}
+        ref_loop_verts = {
+            v
+            for e in ref_edges
+            for v in e.verts
+            if v not in ref_quad_verts
+            and sum(1 for oe in v.link_edges if oe in ref_edges) == 2
+        }
+
+        retri_did_work = False
+        if self.retriangulate_unselected:
+            to_tri = [f for f in visible if len(f.verts) == 4 and f not in ref_quad_set]
+            if to_tri:
+                bmesh.ops.triangulate(bm, faces=to_tri, quad_method="BEAUTY")
+                retri_did_work = True
+                visible = [f for f in bm.faces if not f.hide]
+                ref_grid_edges = {e for e in ref_grid_edges if e.is_valid}
+                ref_loop_verts = {v for v in ref_loop_verts if v.is_valid}
+
+        before_tris = sum(1 for f in visible if len(f.verts) == 3)
+        if before_tris == 0:
+            self.report({"INFO"}, "Mesh already has 0 triangles")
+            return {"FINISHED"}
+
+        uv_borders = _uv_borders(bm, visible) if self.respect_uv_borders else set()
+        diags = detriangulate.solve_quads_from_reference(
+            visible,
+            ref_grid_edges,
+            ref_loop_verts=ref_loop_verts,
+            uv_borders=uv_borders,
+            get_co=lambda v: v.co,
+        )
+
+        quads_built = 0
+        if diags:
+            bmesh.ops.dissolve_edges(bm, edges=diags, use_verts=False, use_face_split=False)
+            quads_built += len(diags)
+
+        # Clean up isolated 2-triangle pairs left on poles / valence-2 corners.
+        visible = [f for f in bm.faces if not f.hide]
+        rem_tris = [f for f in visible if len(f.verts) == 3]
+        if 0 < len(rem_tris) <= 500:
+            uv_borders = {e for e in uv_borders if e.is_valid}
+            extra = unsubdivide.find_fixable_diagonals(
+                visible,
+                uv_borders,
+                edge_length=lambda e: e.calc_length(),
+            )
+            if extra:
+                bmesh.ops.dissolve_edges(bm, edges=extra, use_verts=False, use_face_split=False)
+                quads_built += len(extra)
+                visible = [f for f in bm.faces if not f.hide]
+                rem_tris = [f for f in visible if len(f.verts) == 3]
+
+        changed = bool(quads_built or retri_did_work)
+        if rem_tris:
+            _select_problem_faces(bm, rem_tris)
+            bmesh.update_edit_mesh(me, loop_triangles=changed, destructive=changed)
+            self.report(
+                {"WARNING"},
+                f"Built {quads_built} quad(s); {len(rem_tris)} unresolved triangle(s) selected "
+                f"(true all-quad topology only)",
+            )
+            return {"FINISHED"}
+
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(me, loop_triangles=True, destructive=True)
+        self.report({"INFO"}, f"Rebuilt {before_tris} triangle(s) -> {quads_built} quads from reference")
+        return {"FINISHED"}
+
+
 classes = (
     BLENDERTOOLS_OT_clear_parent_keep_transform,
     BLENDERTOOLS_OT_select_next_loops,
     BLENDERTOOLS_OT_fix_quad_topology,
+    BLENDERTOOLS_OT_quads_from_reference,
     BLENDERTOOLS_OT_unsubdivide_safe,
     BLENDERTOOLS_OT_adaptive_quad_remesh,
 )

@@ -584,6 +584,82 @@ class AdaptiveRemeshTests(unittest.TestCase):
         self.assertEqual(set(anchor), vcols[3])
 
 
+class DetriangulateTests(unittest.TestCase):
+    detri = _load("extended_tools.detriangulate", "extended_tools/detriangulate.py")
+
+    def _triangulate_grid(self, cols, rows, *, wrap_u=False, wrap_v=False, alternate=False):
+        verts, vcols, hrows, faces_2d = _quad_grid(cols, rows, wrap_u=wrap_u, wrap_v=wrap_v)
+        coords = {}
+        vc = len(verts[0])
+        vr = len(verts)
+        for r in range(vr):
+            for c in range(vc):
+                coords[verts[r][c]] = (float(c), float(r), 0.0)
+        diags = set()
+        tris = []
+        for r in range(rows):
+            for c in range(cols):
+                q = faces_2d[r][c]
+                v0, v1, v2, v3 = q.verts
+                emap = {frozenset(e.verts): e for e in q.edges}
+                for e in q.edges:
+                    e.link_faces.remove(q)
+                for v in q.verts:
+                    v.link_faces.remove(q)
+                if alternate and (r + c) % 2 == 1:
+                    d = _E(v1, v3)
+                    t1 = _F([emap[frozenset((v0, v1))], d, emap[frozenset((v3, v0))]], verts=[v0, v1, v3])
+                    t2 = _F([emap[frozenset((v1, v2))], emap[frozenset((v2, v3))], d], verts=[v1, v2, v3])
+                else:
+                    d = _E(v0, v2)
+                    t1 = _F([emap[frozenset((v0, v1))], emap[frozenset((v1, v2))], d], verts=[v0, v1, v2])
+                    t2 = _F([d, emap[frozenset((v2, v3))], emap[frozenset((v3, v0))]], verts=[v0, v2, v3])
+                diags.add(d)
+                tris.extend((t1, t2))
+        return verts, vcols, hrows, tris, diags, coords
+
+    def test_recovers_exact_diagonals_on_open_grid_from_single_reference_loop(self):
+        _, _, hrows, tris, expected_diags, coords = self._triangulate_grid(6, 6, alternate=True)
+        ref_edges = hrows[3]
+        ref_verts = {
+            v for e in ref_edges for v in e.verts if sum(1 for oe in v.link_edges if oe in ref_edges) == 2
+        }
+        got = self.detri.solve_quads_from_reference(
+            tris,
+            ref_edges,
+            ref_loop_verts=ref_verts,
+            get_co=coords.__getitem__,
+        )
+        self.assertEqual(set(got), expected_diags)
+
+    def test_recovers_exact_diagonals_on_seamless_torus_with_parallel_diagonals(self):
+        import math
+        verts, vcols, hrows, tris, expected_diags, _ = self._triangulate_grid(
+            8, 8, wrap_u=True, wrap_v=True, alternate=False
+        )
+        coords = {}
+        for r in range(8):
+            for c in range(8):
+                a = 2.0 * math.pi * c / 8.0
+                b = 2.0 * math.pi * r / 8.0
+                coords[verts[r][c]] = (
+                    (3.0 + math.cos(b)) * math.cos(a),
+                    (3.0 + math.cos(b)) * math.sin(a),
+                    math.sin(b),
+                )
+        ref_edges = hrows[0]
+        ref_verts = {
+            v for e in ref_edges for v in e.verts if sum(1 for oe in v.link_edges if oe in ref_edges) == 2
+        }
+        got = self.detri.solve_quads_from_reference(
+            tris,
+            ref_edges,
+            ref_loop_verts=ref_verts,
+            get_co=coords.__getitem__,
+        )
+        self.assertEqual(set(got), expected_diags)
+
+
 class MessageTests(unittest.TestCase):
     def test_timeout_message_names_the_seconds_and_the_preference(self):
         # The text a user reads when Unreal takes too long.
